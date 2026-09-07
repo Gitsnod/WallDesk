@@ -5,6 +5,9 @@
 
 技术栈：C++17 + Qt Widgets + Win32 API + libVLC（运行时动态加载，可内嵌进 exe）。
 
+> 已发布：<https://github.com/Gitsnod/WallDesk> —— 安装程序与绿色版见
+> [Releases](https://github.com/Gitsnod/WallDesk/releases)。
+
 **当前版本：V4（发行版）**。在 V3（内嵌 VLC + 画廊界面 + 性能优化）基础上补齐
 「发给别人用」所需的一切：发布打包脚本、Inno Setup 安装程序、应用图标与版本资源、
 日志系统、单实例协作、便携模式。版本演进见 [九、版本变更](#九版本变更)。
