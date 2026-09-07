@@ -1,0 +1,27 @@
+# 构建产物
+build/
+dist/
+out/
+
+# 内嵌 VLC 打包产物（体积大，由 tools/pack_vlc.py 按需生成，不入库）
+src/VlcBundle.bin
+src/VlcBundle.rc
+
+# Qt Creator 用户文件
+*.user
+*.user.*
+
+# IDE
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+
+# 图标预览（调试用，不入库）
+resources/app_preview.png
+
+# 系统
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,29 @@
+第三方组件许可声明
+==================
+
+WallDesk 自身代码以 MIT License 发布（见 LICENSE 文件）。
+本软件依赖并随附以下第三方组件，各自适用其原始许可证：
+
+1. Qt（https://www.qt.io/）
+   许可证：GNU Lesser General Public License v3 (LGPL v3)
+   使用方式：动态链接（windeployqt 部署的 Qt DLL）。
+   LGPL 要求：已以动态链接方式使用；Qt 官方源码可从
+   https://code.qt.io/ 获取；本软件未修改 Qt 源码。
+
+2. libVLC / VLC media player（https://www.videolan.org/）
+   许可证：GNU Lesser General Public License v2.1 (LGPL v2.1)
+   使用方式：运行时动态加载（LoadLibrary + GetProcAddress），
+   或以「内嵌运行时」形式将 VLC 的 DLL 与插件封装进 WallDesk.exe，
+   首次运行时解包到用户数据目录。
+   LGPL 要求：已以动态链接方式使用；VLC 官方源码可从
+   https://www.videolan.org/vlc/download-sources.html 获取；
+   本软件未修改 libVLC 源码。
+
+3. Inno Setup 简体中文语言文件（installer/Languages/ChineseSimplified.isl）
+   来源：https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation
+   许可证：MIT License。
+   用途：为安装程序提供简体中文界面。
+
+上述组件的完整许可文本请见其官方网站。若你需要本软件所用
+Qt / VLC 的确切版本与构建参数，请查阅发布包内的 BUILDINFO.txt
+或联系项目维护者。

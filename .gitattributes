@@ -1,0 +1,15 @@
+# Windows 下可执行脚本保持 CRLF，否则双击运行可能异常
+*.bat  text eol=crlf
+*.iss  text eol=crlf
+*.rc   text eol=crlf
+
+# 源码统一 LF，跨平台打开不出问题
+*.cpp  text eol=lf
+*.h    text eol=lf
+*.py   text eol=lf
+*.txt  text eol=crlf
+
+# 二进制明确标记，避免被 Git 误当文本做换行转换
+*.ico  binary
+*.png  binary
+*.bin  binary

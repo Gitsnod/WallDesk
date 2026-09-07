@@ -1,0 +1,141 @@
+#pragma once
+
+#include <QList>
+#include <QObject>
+#include <QRect>
+#include <QString>
+#include <QWidget>
+
+#include "VlcPlayer.h"
+
+class QTimer;
+
+/** 图片填充方式，对应注册表 WallpaperStyle / TileWallpaper。 */
+enum class ImageFit {
+    Fill = 0,    // 填充（可能裁切）
+    Fit = 1,     // 适应（留黑/白边）
+    Stretch = 2, // 拉伸（变形铺满）
+    Tile = 3,    // 平铺
+    Center = 4,  // 居中
+    Span = 5     // 跨区（多屏拼接）
+};
+
+/** 视频壁纸覆盖范围。 */
+enum class ScreenTarget {
+    Primary = 0,   // 仅主显示器
+    Virtual = 1,   // 全部显示器组成的虚拟桌面
+    Monitor = 2    // 指定某一台显示器
+};
+
+/** 显示器信息。坐标使用虚拟桌面坐标系，可为负值。 */
+struct MonitorInfo {
+    QString name;      // 设备名，形如 \\.\DISPLAY1
+    QRect rect;        // 在虚拟桌面中的位置与尺寸
+    bool primary = false;
+
+    QString label() const
+    {
+        return QStringLiteral("%1  %2x%3%4")
+            .arg(name)
+            .arg(rect.width())
+            .arg(rect.height())
+            .arg(primary ? QStringLiteral("  (主)") : QString());
+    }
+};
+
+/**
+ * 壁纸引擎：负责图片壁纸与视频壁纸的实际生效。
+ *
+ * 图片：写注册表 + SystemParametersInfoW(SPI_SETDESKWALLPAPER)。
+ * 视频：找到桌面 WorkerW 层，把宿主窗口挂到它下面（因此视频位于桌面图标之下，
+ *       不会拦截鼠标点击），再用 libVLC 把画面渲染到该窗口。
+ *
+ * V2：降级挂载、看护自动重挂、续播、显示器枚举、状态查询。
+ * V3 增强：
+ *   1. 修掉 V2 的两处编译缺陷（resolveHostParent 缺声明、applyImage 签名不一致）；
+ *   2. 图片参数未变化时跳过注册表与系统接口调用，重复应用几乎零开销；
+ *   3. 看护定时器自适应间隔：异常时 2 秒、正常时 5 秒、暂停时 8 秒；
+ *   4. 支持运行时切换解码档位（重建 libvlc 实例并续播）。
+ */
+class WallpaperEngine : public QObject {
+    Q_OBJECT
+public:
+    explicit WallpaperEngine(QObject* parent = nullptr);
+    ~WallpaperEngine() override;
+
+    /** 枚举当前所有显示器。 */
+    static QList<MonitorInfo> listMonitors();
+
+    bool ensureVideoBackend(QString* err = nullptr);
+    bool loadBackendFrom(const QString& directory, QString* err = nullptr);
+    bool videoBackendReady() const { return m_vlc.isLoaded(); }
+    QString backendPath() const { return m_vlc.libraryPath(); }
+
+    /** 设置视频覆盖范围；修改后若正在播放会自动重新铺满。 */
+    void setTarget(ScreenTarget target, int monitorIndex);
+
+    bool applyImage(const QString& path, ImageFit fit, QString* err = nullptr);
+    bool applyVideo(const QString& path, int volume, QString* err = nullptr);
+
+    /** 切换解码档位。已加载时重建 libvlc 实例并从原位置续播。 */
+    void setPerformanceProfile(VlcProfile profile);
+    VlcProfile performanceProfile() const { return m_vlc.profile(); }
+
+    /** 离线抓帧（生成缩略图用），不干扰正在播放的画面。 */
+    bool snapshotVideo(const QString& file, const QString& outPng, int width, int height);
+
+    /** 重新挂载宿主窗口并从上次位置继续播放。返回是否成功。 */
+    bool reattach();
+    /** 仅重算几何（显示器变化时），不重建播放器。 */
+    void refreshGeometry();
+
+    void stopVideo();
+    void setVideoPaused(bool paused);
+    void setVideoVolume(int volume);
+    bool isVideoActive() const { return m_host != nullptr && m_vlc.isPlaying(); }
+    bool isFallbackMode() const { return m_usingFallback; }
+    PlaybackState videoState() const { return m_vlc.state(); }
+    QString currentVideo() const { return m_currentFile; }
+
+signals:
+    /** 视频壁纸无法维持（重试次数耗尽）时发出，参数为可执行的修复建议。 */
+    void videoFailed(const QString& reason);
+    /** 自动重挂成功后发出。 */
+    void videoRecovered();
+
+private slots:
+    void onWatchdog();
+
+private:
+    HWND resolveWorkerW();
+    HWND resolveHostParent();
+    bool prepareHostWindow();
+    void destroyHostWindow();
+    QRect targetRect() const;
+    void startWatchdog();
+    void stopWatchdog();
+    /** 按当前状态调整看护周期：异常加快、暂停放缓。 */
+    void updateWatchdogInterval();
+
+    VlcPlayer m_vlc;
+    HWND m_workerW = nullptr;      // 桌面 WorkerW 层（视频壁纸张贴位置）
+    HWND m_hostParent = nullptr;   // 宿主当前挂载到的父窗口（降级模式为 nullptr）
+    QWidget* m_host = nullptr;     // 承载 VLC 画面的宿主窗口
+    QTimer* m_watchdog = nullptr;
+
+    ScreenTarget m_target = ScreenTarget::Primary;
+    int m_monitorIndex = 0;
+    bool m_usingFallback = false;  // WorkerW 不可用，已降级为置底顶层窗口
+    bool m_pausedByUser = false;
+
+    QString m_currentFile;         // 当前视频，供重挂续播使用
+    int m_volume = 0;
+    qint64 m_lastTime = 0;         // 最近一次正常播放的位置（毫秒）
+    int m_recoverFails = 0;        // 连续重挂失败计数，超过阈值即放弃并上报
+
+    // 图片壁纸去重：三元组与上次完全一致时跳过系统调用
+    QString m_lastImagePath;
+    QString m_lastStyle;
+    QString m_lastTile;
+    bool m_lastImageOk = false;
+};
