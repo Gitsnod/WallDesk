@@ -67,8 +67,13 @@ public:
     /** 在指定窗口句柄上播放媒体文件。hwnd 为宿主窗口（HWND）。 */
     bool play(const QString& file, void* hwnd, int volume, bool loop);
     /**
-     * 从头重播当前媒体：只 seek 到 0 再 play，不 stop、不重建 media。
-     * 用于片尾循环，避免重建解码链路造成的黑帧与卡顿。
+     * 从头重播当前媒体。
+     *
+     * 实测结论（见 WallpaperEngine 注释）：播放到结尾（Ended）后仅靠
+     * set_time(0) + play() 无法恢复播放——日志里会看到每秒都判成 Ended，
+     * 画面冻在最后一帧。必须先 stop() 让 libvlc 回收已结束的 input，
+     * 再 play() 才能重新起播。stop + play 不重建 media 与解码器，
+     * 开销远小于重新 play 整个文件。
      */
     bool restart();
     void stop();
@@ -92,6 +97,13 @@ public:
 
     void release();
 
+    /**
+     * 放弃接管：析构时不再 stop / 释放 libvlc。
+     * 用于「后台恢复线程仍卡在 libvlc 调用里，而引擎已析构」的竞态——
+     * 宁可泄漏这段资源让进程退出，也不能让两个线程同时操作同一个播放器。
+     */
+    void abandon() { m_abandoned = true; }
+
 private:
     template <typename FnPtr>
     bool bind(FnPtr& fn, const char* symbol);
@@ -107,6 +119,7 @@ private:
     VlcProfile m_profile = VlcProfile::Auto;
     void* m_instance = nullptr; // libvlc_instance_t*
     void* m_player = nullptr;   // libvlc_media_player_t*
+    bool m_abandoned = false;   // 见 abandon()：析构时跳过释放
 
     // libvlc C API 函数指针
     typedef void* (*PfnNew)(int argc, const char* const* argv);

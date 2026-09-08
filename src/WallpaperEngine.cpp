@@ -7,22 +7,35 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QMetaObject>
 #include <QSettings>
+#include <QThread>
 #include <QTimer>
 #include <QtGlobal>
+#include <atomic>
 #include <cstring>
 #include <string>
+#include <thread>
 
 namespace {
 
 /** 上限：连续重挂失败达到该次数后放弃重试并上报，避免无意义的忙等。 */
 constexpr int kMaxRecoverFails = 3;
 /** 看护定时器周期（毫秒）：正常 / 异常 / 暂停三种状态取不同值，避免无谓唤醒。 */
-constexpr int kWatchdogNormalMs = 1000;
-constexpr int kWatchdogFastMs = 2000;
-constexpr int kWatchdogIdleMs = 8000;
-/** 连续多少次看护周期内播放位置未前进，即判定为卡死并从头重播。 */
-constexpr int kMaxStallTicks = 3;
+constexpr int kWatchdogNormalMs = 500;
+constexpr int kWatchdogFastMs = 1000;
+constexpr int kWatchdogIdleMs = 4000;
+/** 连续多少次看护周期内播放位置未前进，即判定为卡死并重建播放。3 秒。 */
+constexpr int kMaxStallTicks = 6;
+/** 连续多少次判定为「已播完」仍救不回来，就升级为完整重建。 */
+constexpr int kMaxEndTicks = 2;
+/**
+ * 片尾提前回卷窗口（毫秒）。
+ * 在真正播完之前就 seek 回 0，播放器永远不进入 Ended 状态——
+ * 既不会冻在最后一帧，也没有「片尾黑一下再接片头」的间隙。
+ * 取值必须大于看护周期，否则可能一整轮都没踩进这个窗口。
+ */
+constexpr qint64 kLoopPreRollMs = 1200;
 
 /** 判断窗口是否覆盖整个主屏幕（允许少量误差）。 */
 bool coversScreen(HWND hwnd)
@@ -111,13 +124,13 @@ HWND findDesktopWorkerW()
 {
     HWND progman = FindWindowW(L"Progman", nullptr);
     if (progman) {
-        // 先尝试发送 0x052C，让它把壁纸层 WorkerW 创建/刷新出来
-        for (int attempt = 0; attempt < 3; ++attempt) {
-            DWORD_PTR unused = 0;
-            SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 500, &unused);
-            if (HWND worker = findWorkerWUnderProgman()) {
-                return worker;
-            }
+        // 先尝试发送 0x052C，让它把壁纸层 WorkerW 创建/刷新出来。
+        // 只发一次且超时压到 200ms：这个函数跑在界面线程，
+        // 之前 3 次 × 500ms 最坏会把界面卡住 1.5 秒（「无响应」的来源之一）。
+        DWORD_PTR unused = 0;
+        SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 200, &unused);
+        if (HWND worker = findWorkerWUnderProgman()) {
+            return worker;
         }
     }
     if (HWND worker = findWorkerWAfterDefView()) {
@@ -184,7 +197,18 @@ WallpaperEngine::WallpaperEngine(QObject* parent)
 
 WallpaperEngine::~WallpaperEngine()
 {
-    stopVideo();
+    stopWatchdog();
+    ++m_epoch;
+    if (m_asyncBusy.load()) {
+        // 后台线程还在这个播放器上，不能在析构里释放，否则两个线程同时操作
+        m_vlc.abandon();
+    } else {
+        m_vlc.release();
+    }
+    if (m_hostWnd) {
+        DestroyWindow(m_hostWnd);
+        m_hostWnd = nullptr;
+    }
 }
 
 bool WallpaperEngine::ensureVideoBackend(QString* err)
@@ -454,6 +478,10 @@ bool WallpaperEngine::applyVideo(const QString& path, int volume, QString* err)
                      .arg(QStringLiteral("(%1,%2)").arg(rect.x()).arg(rect.y()))
                      .arg(mode));
 
+    ++m_epoch;       // 让在途的后台自救任务自动失效，避免它把旧媒体重新拉起来
+    m_stopRequested = false;
+    waitAsync(1500); // 后台任务若仍在跑，等它收尾（同一播放器不能并发操作）
+
     if (!m_vlc.play(path, reinterpret_cast<void*>(m_hostWnd), volume, true)) {
         if (err) {
             *err = QStringLiteral("libVLC 无法播放该文件（编码可能不受支持）：%1").arg(path);
@@ -467,6 +495,8 @@ bool WallpaperEngine::applyVideo(const QString& path, int volume, QString* err)
     m_volume = volume;
     m_recoverFails = 0;
     m_lastTime = 0;
+    m_stallCount = 0;
+    m_endTicks = 0;
 
     // 视频与图片互斥：视频生效后清空图片去重缓存，
     // 确保下次切换回图片时不会误命中“与上次一致”而跳过。
@@ -540,12 +570,29 @@ void WallpaperEngine::setTarget(ScreenTarget target, int monitorIndex)
 void WallpaperEngine::stopVideo()
 {
     stopWatchdog();
-    m_vlc.releaseMedia(); // 连同解码缓冲一起释放，切到图片壁纸后可省内存
-    destroyHostWindow();
+    ++m_epoch; // 让在途后台任务失效：它们收尾时会补一次停止，不会把画面重新拉起
+    m_stopRequested = true;
+
+    // 先隐藏：窗口仍在，但视觉上立刻回到系统壁纸，不用等解码器收尾
+    if (m_hostWnd) {
+        ShowWindow(m_hostWnd, SW_HIDE);
+    }
+
+    // stop() 在解码卡死时会长时间阻塞，放到后台，界面不会跟着「无响应」
+    const int epoch = m_epoch.load();
+    if (!runAsync([this, epoch] {
+            m_vlc.releaseMedia(); // 连同解码缓冲一起释放，切到图片壁纸后可省内存
+            finishAsyncOp(epoch);
+        })) {
+        // 已有后台任务：它结束时发现 epoch 变了会自行收尾，这里不再插手
+        Logger::info(QStringLiteral("停止壁纸：后台任务执行中，交由其收尾"));
+    }
+
     m_currentFile.clear();
     m_recoverFails = 0;
     m_lastTime = 0;
     m_stallCount = 0;
+    m_endTicks = 0;
 }
 
 void WallpaperEngine::setVideoPaused(bool paused)
@@ -626,10 +673,86 @@ void WallpaperEngine::updateWatchdogInterval()
     }
 }
 
+bool WallpaperEngine::runAsync(std::function<void()> op)
+{
+    if (m_asyncBusy.exchange(true)) {
+        return false; // 已有任务在跑：同一个播放器不能并发操作
+    }
+    std::thread([this, op] {
+        op();
+        m_asyncBusy.store(false);
+    }).detach();
+    return true;
+}
+
+void WallpaperEngine::waitAsync(int maxMs)
+{
+    const int step = 25;
+    for (int waited = 0; waited < maxMs && m_asyncBusy.load(); waited += step) {
+        QThread::msleep(step);
+    }
+}
+
+void WallpaperEngine::finishAsyncOp(int epoch)
+{
+    if (m_epoch.load() != epoch) {
+        // 已被「停止壁纸 / 换源」取代：补一次停止，别把旧画面重新拉起来
+        m_vlc.releaseMedia();
+    }
+    // 窗口只能在创建它的线程销毁，排回界面线程。
+    // 期间用户可能又应用了新壁纸（窗口被复用），此时绝不能销毁。
+    QMetaObject::invokeMethod(this, [this] {
+        if (m_stopRequested) {
+            destroyHostWindow();
+        }
+    }, Qt::QueuedConnection);
+}
+
+void WallpaperEngine::recoverPlayback(bool full)
+{
+    if (m_currentFile.isEmpty()) {
+        return;
+    }
+    const QString file = m_currentFile;
+    const HWND hwnd = m_hostWnd;
+    const int volume = m_volume;
+    const int epoch = m_epoch.load();
+    m_lastTime = 0;
+    m_stallCount = 0;
+
+    if (!runAsync([this, file, hwnd, volume, full, epoch] {
+            bool ok = m_vlc.restart(); // 轻量：stop + play，不重建 media
+            if (!ok || full) {
+                ok = m_vlc.play(file, reinterpret_cast<void*>(hwnd), volume, true);
+            }
+            if (!ok) {
+                QMetaObject::invokeMethod(this, [this] {
+                    if (++m_recoverFails >= kMaxRecoverFails) {
+                        stopWatchdog();
+                        emit videoFailed(QStringLiteral("视频壁纸连续 %1 次自救失败，已停止自动恢复。"
+                                                        "可点「重新挂载」或重启程序重试。")
+                                             .arg(m_recoverFails));
+                    } else {
+                        reattach();
+                    }
+                }, Qt::QueuedConnection);
+                return;
+            }
+            m_recoverFails = 0;
+            finishAsyncOp(epoch);
+        })) {
+        Logger::info(QStringLiteral("已有自救任务在执行，本次不再重复触发"));
+    }
+}
+
 void WallpaperEngine::onWatchdog()
 {
     if (!m_hostWnd) {
         stopWatchdog();
+        return;
+    }
+    // 后台任务正在操作同一个播放器：这一轮只做窗口存活检查，不碰 libvlc
+    if (m_asyncBusy.load() && m_vlc.isLoaded()) {
         return;
     }
 
@@ -651,19 +774,29 @@ void WallpaperEngine::onWatchdog()
 
     const PlaybackState current = m_vlc.state();
     if (current == PlaybackState::Playing) {
-        // 卡死检测：状态是 Playing 但播放位置长时间不前进，
-        // 多半是解码链路卡住。连续停滞超过阈值就从头重播（不重建窗口）。
         const qint64 now = m_vlc.time();
-        if (now > 0 && now == m_lastTime) {
-            if (++m_stallCount >= kMaxStallTicks) {
-                m_stallCount = 0;
-                Logger::warning(QStringLiteral("播放位置停滞（%1 次未前进），从头重播").arg(kMaxStallTicks));
-                m_vlc.restart();
-            }
-        } else {
+        const qint64 total = m_vlc.length();
+
+        if (total > kLoopPreRollMs && now >= total - kLoopPreRollMs) {
+            // 片尾提前回卷：趁播放器还活着 seek 回 0，根本不进入 Ended 状态，
+            // 所以既不会冻在末帧，也没有片尾到片头的黑帧间隙。
+            m_vlc.setTime(0);
+            m_lastTime = 0;
             m_stallCount = 0;
+            m_endTicks = 0;
+        } else if (now > 0 && now != m_lastTime) {
+            m_stallCount = 0; // 位置在前进，正常
+            m_endTicks = 0;
+            m_lastTime = now;
+        } else if (++m_stallCount >= kMaxStallTicks) {
+            // 状态是 Playing 但位置不前进（或时间读不出来）= 解码链路卡死。
+            // 后台重建播放：主线程不碰可能阻塞的 stop()，界面不会无响应。
+            m_stallCount = 0;
+            Logger::warning(QStringLiteral("播放位置停滞（time=%1），后台重建播放").arg(now));
+            recoverPlayback(true);
+            return;
         }
-        m_lastTime = now;
+
         // 首帧已渲染出来，此时才把宿主窗口亮出来，避免切换时闪空白底
         if (!m_hostShown && IsWindow(hwnd)) {
             ShowWindow(hwnd, SW_SHOW);
@@ -674,14 +807,21 @@ void WallpaperEngine::onWatchdog()
         return;
     }
     if (current == PlaybackState::Ended || current == PlaybackState::Stopped) {
-        // 播完或意外停止：只 seek 到 0 再 play，不重建 media，
-        // 消除片尾到片头的黑帧与卡顿。
-        Logger::info(QStringLiteral("视频播放到结尾（状态 %1），自动重新循环").arg(static_cast<int>(current)));
+        // 播完（或意外停止）：stop + play 重播。只靠 set_time(0)+play 救不回来
+        // ——实测会每秒都判成 Ended、画面冻在末帧，所以必须先 stop 回收 input。
+        // 若连续几轮都救不回来，升级为完整重建（换新的 media 起播）。
         m_stallCount = 0;
-        if (!m_vlc.restart()) {
-            // 轻量重播失败才退回完整重播，保证不会永久卡住
-            Logger::warning(QStringLiteral("轻量重播失败，改为完整重播"));
-            m_vlc.play(m_currentFile, reinterpret_cast<void*>(m_hostWnd), m_volume, true);
+        if (m_endTicks < kMaxEndTicks) {
+            ++m_endTicks;
+            Logger::info(QStringLiteral("视频播放到结尾（状态 %1），重新循环").arg(static_cast<int>(current)));
+            if (!m_vlc.restart()) {
+                Logger::warning(QStringLiteral("轻量重播失败，改为后台完整重播"));
+                recoverPlayback(true);
+            }
+        } else {
+            m_endTicks = 0;
+            Logger::warning(QStringLiteral("连续多次重播无效，后台完整重建播放"));
+            recoverPlayback(true);
         }
         return;
     }
@@ -690,5 +830,5 @@ void WallpaperEngine::onWatchdog()
         reattach();
         return;
     }
-    Logger::info(QStringLiteral("播放状态：%1（等待起播）").arg(static_cast<int>(current)));
+    // 起播阶段（Opening / Buffering）：不打日志刷屏，等下一轮再看
 }

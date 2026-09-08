@@ -5,6 +5,9 @@
 #include <QRect>
 #include <QString>
 
+#include <atomic>
+#include <functional>
+
 #include "VlcPlayer.h"
 
 class QTimer;
@@ -104,17 +107,40 @@ signals:
 
 private slots:
     void onWatchdog();
+    /** 销毁宿主窗口。声明为槽：后台线程只能通过队列调用它。 */
+    void destroyHostWindow();
 
 private:
     HWND resolveWorkerW();
     HWND resolveHostParent();
     bool prepareHostWindow();
-    void destroyHostWindow();
     QRect targetRect() const;
     void startWatchdog();
     void stopWatchdog();
     /** 按当前状态调整看护周期：异常加快、暂停放缓。 */
     void updateWatchdogInterval();
+
+    /**
+     * 把一个可能阻塞的 libvlc 操作放到后台线程执行。
+     *
+     * 动机：解码链路卡死时 libvlc_media_player_stop() 会一直等不到 input 线程
+     * 退出，若在主线程调用就会把界面拖成「无响应」（实测复现）。放到后台后，
+     * 最坏情况是这一个后台线程卡住，界面照常可用。
+     * 同一时刻只允许一个后台任务（共用同一个播放器对象），已有任务时直接跳过。
+     * @return 是否真正启动了后台任务。
+     */
+    bool runAsync(std::function<void()> op);
+    /** 等待正在执行的后台任务收尾，最多 maxMs 毫秒。 */
+    void waitAsync(int maxMs);
+    /** 卡死 / 重播无效时的后台自救：先轻量重播，再按需完整重建。 */
+    void recoverPlayback(bool full);
+    /**
+     * 后台任务的统一收尾：判断是否已被更新的操作取代（epoch 变化），
+     * 若是则补一次停止，并把窗口销毁排回界面线程。
+     */
+    void finishAsyncOp(int epoch);
+    /** epoch：每发起一次新的播放/停止都会自增，用于让在途后台任务自动失效。 */
+    std::atomic<int> m_epoch{0};
 
     VlcPlayer m_vlc;
     HWND m_workerW = nullptr;      // 桌面 WorkerW 层（视频壁纸张贴位置）
@@ -128,12 +154,15 @@ private:
     bool m_usingFallback = false;  // WorkerW 不可用，已降级为置底顶层窗口
     bool m_hostOnDefView = false;  // Win11 模式：宿主挂在 SHELLDLL_DefView 下
     bool m_pausedByUser = false;
+    bool m_stopRequested = false;  // 已请求停止，宿主窗口允许销毁
 
     QString m_currentFile;         // 当前视频，供重挂续播使用
     int m_volume = 0;
     qint64 m_lastTime = 0;         // 最近一次正常播放的位置（毫秒）
     int m_recoverFails = 0;        // 连续重挂失败计数，超过阈值即放弃并上报
     int m_stallCount = 0;          // 播放位置连续未前进的看护周期数，用于卡死检测
+    int m_endTicks = 0;            // 连续判定为「已播完」的看护周期数，用于升级自救手段
+    std::atomic<bool> m_asyncBusy{false}; // 有后台 libvlc 任务在跑
 
     // 图片壁纸去重：三元组与上次完全一致时跳过系统调用
     QString m_lastImagePath;

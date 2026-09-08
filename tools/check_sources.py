@@ -80,6 +80,15 @@ def strip_signals(text):
                   "\n", text, flags=re.S)
 
 
+def strip_comments(text):
+    """剔除 C++ 单行/多行注释与字符串字面量，避免它们干扰声明/定义匹配。"""
+    text = re.sub(r"//[^\n]*", "", text)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r'"(\\.|[^"\\])*"', '""', text)
+    text = re.sub(r"'(\\.|[^'\\])*'", "''", text)
+    return text
+
+
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.chdir(root)
@@ -98,18 +107,20 @@ def main():
 
     # 2) 声明 → 定义
     for header, source in PAIRS:
-        decls = re.findall(DECL_RE, strip_signals(texts[header]), re.M)
+        decls = re.findall(DECL_RE, strip_comments(strip_signals(texts[header])), re.M)
         for decl in decls:
-            if f"{header[:-2]}::{decl}" not in texts[source]:
+            if f"{header[:-2]}::{decl}" not in strip_comments(texts[source]):
                 issues.append(f"[符号] {header} 声明的 {decl}() 在 {source} 中未定义")
 
     # 3) 定义 → 声明（反向）：漏声明会直接编译失败，必须拦住
     for header, source in PAIRS:
         cls = header[:-2]
-        for name in sorted(set(re.findall(rf"\b{cls}::(\w+)\s*\(", texts[source]))):
+        src_clean = strip_comments(texts[source])
+        hdr_clean = strip_comments(texts[header])
+        for name in sorted(set(re.findall(rf"\b{cls}::(\w+)\s*\(", src_clean))):
             if name == cls:
                 continue  # 构造函数
-            if re.search(rf"\b{re.escape(name)}\s*\(", texts[header]) is None:
+            if re.search(rf"\b{re.escape(name)}\s*\(", hdr_clean) is None:
                 issues.append(f"[符号] {source} 定义的 {cls}::{name}() 在 {header} 中未声明")
 
     # 4) libVLC 函数指针绑定与调用

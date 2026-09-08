@@ -97,7 +97,8 @@ private:
     QWidget* buildSettingsPage();
     QWidget* buildToolsPage();
     /** 底部常驻播放控制条：所有页面共用，消除功能按钮重复。 */
-    QWidget* buildControlBar();
+    /** 顶部贯穿工具条：库管理与播放控制并排，所有页面共用一份。 */
+    QWidget* buildMainToolbar();
     /** 依据窗口宽度自适应画廊缩略图密度（V4.1 缩放自适应）。 */
     void adaptGalleryDensity();
     void setupWatcher();
@@ -152,11 +153,10 @@ private:
     QCheckBox* m_restoreLast = nullptr;
     QCheckBox* m_portable = nullptr;
     QLabel* m_status = nullptr;
-    QLabel* m_currentLabel = nullptr; // 底部控制条：当前生效的壁纸名
     QProgressBar* m_busy = nullptr;
     QPushButton* m_pauseButton = nullptr;
-    QPushButton* m_applyButton = nullptr; // 壁纸库页
-    QPushButton* m_nextButton = nullptr;  // 壁纸库页
+    QPushButton* m_applyButton = nullptr; // 顶部贯穿工具条
+    QPushButton* m_nextButton = nullptr;  // 顶部贯穿工具条
 
     QTimer* m_timer = nullptr;
     QSystemTrayIcon* m_tray = nullptr;

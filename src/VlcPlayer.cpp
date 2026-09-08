@@ -75,6 +75,9 @@ VlcPlayer::VlcPlayer() = default;
 
 VlcPlayer::~VlcPlayer()
 {
+    if (m_abandoned) {
+        return; // 后台恢复线程可能还在这个播放器上，交给进程退出时回收
+    }
     release();
 }
 
@@ -330,10 +333,11 @@ bool VlcPlayer::restart()
     if (!m_player || !libvlc_media_player_play_) {
         return false;
     }
-    // 播完（Ended）后播放器处于停止态，仅 set_time 不会恢复播放，
-    // 必须再调一次 play；由于 media 与解码链路都还在，这比完整 play 快得多。
-    if (libvlc_media_player_set_time_) {
-        libvlc_media_player_set_time_(m_player, 0);
+    // 播完（Ended）后播放器里残留一个已结束的 input，此时 set_time + play
+    // 不会重新起播（实测：状态每秒仍是 Ended，画面冻在末帧）。
+    // 先 stop 回收该 input，再 play 才会从头重新解码播放。
+    if (libvlc_media_player_stop_) {
+        libvlc_media_player_stop_(m_player);
     }
     return libvlc_media_player_play_(m_player) == 0;
 }
