@@ -66,7 +66,14 @@ public:
 
     /** 在指定窗口句柄上播放媒体文件。hwnd 为宿主窗口（HWND）。 */
     bool play(const QString& file, void* hwnd, int volume, bool loop);
+    /**
+     * 从头重播当前媒体：只 seek 到 0 再 play，不 stop、不重建 media。
+     * 用于片尾循环，避免重建解码链路造成的黑帧与卡顿。
+     */
+    bool restart();
     void stop();
+    /** 停止并释放当前媒体（解码缓冲随之归还），用于切到图片壁纸后省内存。 */
+    void releaseMedia();
     void setPaused(bool paused);
     void setVolume(int volume);
     bool isPlaying() const;

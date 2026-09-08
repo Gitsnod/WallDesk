@@ -25,7 +25,7 @@
 namespace {
 
 /** 缓存条目上限，超出后清理最旧的一半，防止长期占用磁盘。 */
-constexpr int kMaxCacheFiles = 2000;
+constexpr int kMaxCacheFiles = 600;
 constexpr int kTrimCheckEvery = 50;
 
 std::atomic<int> gSaveCounter{0};

@@ -21,6 +21,8 @@ constexpr int kMaxRecoverFails = 3;
 constexpr int kWatchdogNormalMs = 1000;
 constexpr int kWatchdogFastMs = 2000;
 constexpr int kWatchdogIdleMs = 8000;
+/** 连续多少次看护周期内播放位置未前进，即判定为卡死并从头重播。 */
+constexpr int kMaxStallTicks = 3;
 
 /** 判断窗口是否覆盖整个主屏幕（允许少量误差）。 */
 bool coversScreen(HWND hwnd)
@@ -208,9 +210,6 @@ bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, QString* err
         return false;
     }
 
-    // 图片与视频互斥：应用图片时立即停用视频，避免两者叠加导致状态混乱
-    stopVideo();
-
     // 填充方式写入注册表，随后必须再触发一次 SPI_SETDESKWALLPAPER 才会生效
     QSettings reg(QStringLiteral(R"(HKEY_CURRENT_USER\Control Panel\Desktop)"), QSettings::NativeFormat);
 
@@ -241,6 +240,8 @@ bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, QString* err
     const QString absolute = info.absoluteFilePath();
     if (m_lastImageOk && m_lastImagePath == absolute && m_lastStyle == style
         && m_lastTile == tile) {
+        // 参数未变也要保证视频已停：图片与视频互斥
+        stopVideo();
         return true;
     }
 
@@ -264,6 +265,10 @@ bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, QString* err
     m_lastStyle = style;
     m_lastTile = tile;
     m_lastImageOk = true;
+
+    // 图片与视频互斥：先让新壁纸生效，再撤掉视频窗口，
+    // 这样切换过程中桌面不会出现「先黑一下再出图」的顿挫。
+    stopVideo();
     return true;
 }
 
@@ -364,9 +369,11 @@ bool WallpaperEngine::prepareHostWindow()
         if (GetParent(m_hostWnd) != m_hostParent) {
             SetParent(m_hostWnd, m_hostParent);
         }
-        // 子窗口形态：不抢焦点，且不干扰桌面图标
+        // 子窗口形态：不抢焦点，且不干扰桌面图标。
+        // 不带 WS_VISIBLE：等 VLC 起播（watchdog 确认 Playing）再显示，
+        // 避免图片→视频切换时空白宿主先闪一下的顿挫。
         SetWindowLongPtrW(m_hostWnd, GWL_STYLE,
-                          WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
+                          WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
         SetWindowLongPtrW(m_hostWnd, GWL_EXSTYLE, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
 
         if (m_hostOnDefView) {
@@ -375,7 +382,7 @@ bool WallpaperEngine::prepareHostWindow()
             // 注意 SetWindowPos 的第二参数是「排在该窗口之后（更低）」，
             // 压到 listview 之下会被遮蔽，必须用 HWND_TOP。
             SetWindowPos(m_hostWnd, HWND_TOP, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     } else {
         // 降级形态：独立顶层无边框窗口，靠 Z 序置底
@@ -383,10 +390,11 @@ bool WallpaperEngine::prepareHostWindow()
             SetParent(m_hostWnd, nullptr);
         }
         SetWindowLongPtrW(m_hostWnd, GWL_STYLE,
-                          WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
+                          WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
         SetWindowLongPtrW(m_hostWnd, GWL_EXSTYLE, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
     }
 
+    m_hostShown = false;
     refreshGeometry();
     return true;
 }
@@ -397,9 +405,10 @@ void WallpaperEngine::refreshGeometry()
         return;
     }
     const QRect rect = targetRect();
-    const UINT flags = m_hostParent
-                           ? (SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOZORDER)
-                           : (SWP_SHOWWINDOW | SWP_NOACTIVATE); // 置底仅对顶层窗口有意义
+    // 首帧渲染前不显示窗口：起播后再由看护逻辑展示，切换过程不露空白底
+    const UINT showFlag = m_hostShown ? SWP_SHOWWINDOW : 0;
+    const UINT flags = showFlag | SWP_NOACTIVATE
+                           | (m_hostParent ? SWP_NOZORDER : 0);
     SetWindowPos(m_hostWnd, HWND_BOTTOM, rect.x(), rect.y(), rect.width(), rect.height(), flags);
 }
 
@@ -410,6 +419,7 @@ void WallpaperEngine::destroyHostWindow()
         m_hostWnd = nullptr;
     }
     m_hostParent = nullptr;
+    m_hostShown = false;
 }
 
 bool WallpaperEngine::applyVideo(const QString& path, int volume, QString* err)
@@ -530,11 +540,12 @@ void WallpaperEngine::setTarget(ScreenTarget target, int monitorIndex)
 void WallpaperEngine::stopVideo()
 {
     stopWatchdog();
-    m_vlc.stop();
+    m_vlc.releaseMedia(); // 连同解码缓冲一起释放，切到图片壁纸后可省内存
     destroyHostWindow();
     m_currentFile.clear();
     m_recoverFails = 0;
     m_lastTime = 0;
+    m_stallCount = 0;
 }
 
 void WallpaperEngine::setVideoPaused(bool paused)
@@ -640,16 +651,38 @@ void WallpaperEngine::onWatchdog()
 
     const PlaybackState current = m_vlc.state();
     if (current == PlaybackState::Playing) {
-        m_lastTime = m_vlc.time();
+        // 卡死检测：状态是 Playing 但播放位置长时间不前进，
+        // 多半是解码链路卡住。连续停滞超过阈值就从头重播（不重建窗口）。
+        const qint64 now = m_vlc.time();
+        if (now > 0 && now == m_lastTime) {
+            if (++m_stallCount >= kMaxStallTicks) {
+                m_stallCount = 0;
+                Logger::warning(QStringLiteral("播放位置停滞（%1 次未前进），从头重播").arg(kMaxStallTicks));
+                m_vlc.restart();
+            }
+        } else {
+            m_stallCount = 0;
+        }
+        m_lastTime = now;
+        // 首帧已渲染出来，此时才把宿主窗口亮出来，避免切换时闪空白底
+        if (!m_hostShown && IsWindow(hwnd)) {
+            ShowWindow(hwnd, SW_SHOW);
+            m_hostShown = true;
+            refreshGeometry();
+        }
         updateWatchdogInterval(); // 状态已稳定，回到常规间隔
         return;
     }
-    if (current == PlaybackState::Ended) {
-        // input-repeat 在部分文件/版本上循环有黑帧间隔；直接 seek 到 0
-        // 并恢复播放，不重建 media、不 stop，消除片尾到片头的卡顿。
-        Logger::info(QStringLiteral("视频播放到结尾，自动重新循环"));
-        m_vlc.setTime(0);
-        m_vlc.setPaused(false);
+    if (current == PlaybackState::Ended || current == PlaybackState::Stopped) {
+        // 播完或意外停止：只 seek 到 0 再 play，不重建 media，
+        // 消除片尾到片头的黑帧与卡顿。
+        Logger::info(QStringLiteral("视频播放到结尾（状态 %1），自动重新循环").arg(static_cast<int>(current)));
+        m_stallCount = 0;
+        if (!m_vlc.restart()) {
+            // 轻量重播失败才退回完整重播，保证不会永久卡住
+            Logger::warning(QStringLiteral("轻量重播失败，改为完整重播"));
+            m_vlc.play(m_currentFile, reinterpret_cast<void*>(m_hostWnd), m_volume, true);
+        }
         return;
     }
     if (current == PlaybackState::Error) {

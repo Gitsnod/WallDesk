@@ -325,11 +325,34 @@ bool VlcPlayer::play(const QString& file, void* hwnd, int volume, bool loop)
     return libvlc_media_player_play_(m_player) == 0;
 }
 
+bool VlcPlayer::restart()
+{
+    if (!m_player || !libvlc_media_player_play_) {
+        return false;
+    }
+    // 播完（Ended）后播放器处于停止态，仅 set_time 不会恢复播放，
+    // 必须再调一次 play；由于 media 与解码链路都还在，这比完整 play 快得多。
+    if (libvlc_media_player_set_time_) {
+        libvlc_media_player_set_time_(m_player, 0);
+    }
+    return libvlc_media_player_play_(m_player) == 0;
+}
+
 void VlcPlayer::stop()
 {
     if (m_player) {
         libvlc_media_player_stop_(m_player);
     }
+}
+
+void VlcPlayer::releaseMedia()
+{
+    if (!m_player || !libvlc_media_player_set_media_) {
+        return;
+    }
+    libvlc_media_player_stop_(m_player);
+    // 置空媒体会连带释放解码器与缓冲，壁纸停在图片时可省下几十 MB
+    libvlc_media_player_set_media_(m_player, nullptr);
 }
 
 void VlcPlayer::setPaused(bool paused)

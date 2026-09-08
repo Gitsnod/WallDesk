@@ -204,6 +204,13 @@ QListWidget#navRail::item {
 }
 QListWidget#navRail::item:hover { background: {hover}; color: {text}; }
 QListWidget#navRail::item:selected { background: {accentSoft}; color: {text}; }
+
+/* ---- 底部常驻播放控制条 ---- */
+QWidget#controlBar {
+    background: {card};
+    border-top: 1px solid {border};
+}
+QLabel#currentLabel { color: {subText}; padding-right: 4px; }
 )";
 
 /** 把 {key} 占位符替换成实际色值。用花括号而非 %1，避免 QString::arg 的参数个数限制。 */

@@ -200,7 +200,11 @@ QIcon drawNavIcon(const QColor& accent, int kind)
 void MainWindow::buildUi()
 {
     auto* central = new QWidget(this);
-    auto* root = new QHBoxLayout(central);
+    auto* outer = new QVBoxLayout(central);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* root = new QHBoxLayout();
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
@@ -234,6 +238,10 @@ void MainWindow::buildUi()
     m_pages->addWidget(buildSettingsPage());
     m_pages->addWidget(buildToolsPage());
     root->addWidget(m_pages, 1);
+    outer->addLayout(root, 1);
+
+    // 播放控制统一放到底部常驻工具条：所有页面共用，避免功能按钮重复出现
+    outer->addWidget(buildControlBar());
 
     setCentralWidget(central);
 
@@ -326,28 +334,21 @@ QWidget* MainWindow::buildLibraryPage()
     layout->setContentsMargins(16, 14, 16, 12);
     layout->setSpacing(10);
 
-    // ---- 播放工具条 ----
+    // ---- 库管理条（播放控制已统一到底部常驻工具条）----
     auto* actions = new QHBoxLayout();
-    m_applyButton = new QPushButton(QStringLiteral("应用选中"), pane);
-    m_applyButton->setObjectName(QStringLiteral("primary"));
-    m_nextButton = new QPushButton(QStringLiteral("下一张"), pane);
-    m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), pane);
-    auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), pane);
-    connect(m_applyButton, &QPushButton::clicked, this, &MainWindow::onApplySelected);
-    connect(m_nextButton, &QPushButton::clicked, this, &MainWindow::onNext);
-    connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onTogglePause);
-    connect(stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
-    actions->addWidget(m_applyButton);
-    actions->addWidget(m_nextButton);
-    actions->addWidget(m_pauseButton);
-    actions->addWidget(stopBtn);
-    actions->addStretch(1);
+    auto* addImageBtn2 = new QPushButton(QStringLiteral("添加图片"), pane);
+    auto* addVideoBtn2 = new QPushButton(QStringLiteral("添加视频"), pane);
+    connect(addImageBtn2, &QPushButton::clicked, this, &MainWindow::onAddImages);
+    connect(addVideoBtn2, &QPushButton::clicked, this, &MainWindow::onAddVideos);
     auto* clearBtn = new QPushButton(QStringLiteral("清空"), pane);
     clearBtn->setObjectName(QStringLiteral("danger"));
     auto* removeBtn = new QPushButton(QStringLiteral("移除"), pane);
     removeBtn->setObjectName(QStringLiteral("danger"));
     connect(removeBtn, &QPushButton::clicked, this, &MainWindow::onRemoveSelected);
     connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearAll);
+    actions->addWidget(addImageBtn2);
+    actions->addWidget(addVideoBtn2);
+    actions->addStretch(1);
     actions->addWidget(removeBtn);
     actions->addWidget(clearBtn);
     layout->addLayout(actions);
@@ -374,17 +375,6 @@ QWidget* MainWindow::buildLibraryPage()
         }
     });
     layout->addWidget(m_list, 1);
-
-    // ---- 库管理条 ----
-    auto* row = new QHBoxLayout();
-    auto* addImageBtn = new QPushButton(QStringLiteral("添加图片"), pane);
-    auto* addVideoBtn = new QPushButton(QStringLiteral("添加视频"), pane);
-    connect(addImageBtn, &QPushButton::clicked, this, &MainWindow::onAddImages);
-    connect(addVideoBtn, &QPushButton::clicked, this, &MainWindow::onAddVideos);
-    row->addWidget(addImageBtn);
-    row->addWidget(addVideoBtn);
-    row->addStretch(1);
-    layout->addLayout(row);
 
     return pane;
 }
@@ -549,27 +539,7 @@ QWidget* MainWindow::buildToolsPage()
     fileLayout->addStretch(1);
     layout->addWidget(fileBox);
 
-    // ---- 播放 ----
-    auto* playBox = new QGroupBox(QStringLiteral("播放"), pane);
-    auto* playLayout = new QHBoxLayout(playBox);
-    auto* applyBtn = new QPushButton(QStringLiteral("应用选中"), playBox);
-    applyBtn->setObjectName(QStringLiteral("primary"));
-    auto* nextBtn = new QPushButton(QStringLiteral("下一张"), playBox);
-    auto* pauseBtn = new QPushButton(QStringLiteral("暂停 / 继续"), playBox);
-    auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), playBox);
-    auto* reattachBtn = new QPushButton(QStringLiteral("重新挂载"), playBox);
-    connect(applyBtn, &QPushButton::clicked, this, &MainWindow::onApplySelected);
-    connect(nextBtn, &QPushButton::clicked, this, &MainWindow::onNext);
-    connect(pauseBtn, &QPushButton::clicked, this, &MainWindow::onTogglePause);
-    connect(stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
-    connect(reattachBtn, &QPushButton::clicked, this, &MainWindow::onReattach);
-    playLayout->addWidget(applyBtn);
-    playLayout->addWidget(nextBtn);
-    playLayout->addWidget(pauseBtn);
-    playLayout->addWidget(stopBtn);
-    playLayout->addWidget(reattachBtn);
-    playLayout->addStretch(1);
-    layout->addWidget(playBox);
+    // 播放控制已统一到底部常驻工具条，工具页不再重复提供
 
     // ---- 视图 ----
     auto* viewBox = new QGroupBox(QStringLiteral("视图"), pane);
@@ -607,6 +577,53 @@ QWidget* MainWindow::buildToolsPage()
 
     layout->addStretch(1);
     return pane;
+}
+
+QWidget* MainWindow::buildControlBar()
+{
+    auto* bar = new QWidget(this);
+    bar->setObjectName(QStringLiteral("controlBar"));
+    auto* layout = new QHBoxLayout(bar);
+    layout->setContentsMargins(14, 10, 14, 10);
+    layout->setSpacing(8);
+
+    // 播放控制集中在这里，壁纸库页与工具页不再各自放一份
+    m_applyButton = new QPushButton(QStringLiteral("应用选中"), bar);
+    m_applyButton->setObjectName(QStringLiteral("primary"));
+    m_applyButton->setToolTip(QStringLiteral("把画廊中选中的项应用到桌面（回车）"));
+
+    m_nextButton = new QPushButton(QStringLiteral("下一张"), bar);
+    m_nextButton->setToolTip(QStringLiteral("切换到清单中的下一项（Ctrl+N）"));
+
+    m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), bar);
+    m_pauseButton->setToolTip(QStringLiteral("暂停 / 继续视频壁纸（Ctrl+P）"));
+
+    auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), bar);
+    stopBtn->setToolTip(QStringLiteral("停止视频壁纸，桌面恢复为系统壁纸"));
+
+    auto* reattachBtn = new QPushButton(QStringLiteral("重新挂载"), bar);
+    reattachBtn->setToolTip(QStringLiteral("桌面层失效后重新挂接视频窗口（F5）"));
+
+    connect(m_applyButton, &QPushButton::clicked, this, &MainWindow::onApplySelected);
+    connect(m_nextButton, &QPushButton::clicked, this, &MainWindow::onNext);
+    connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onTogglePause);
+    connect(stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
+    connect(reattachBtn, &QPushButton::clicked, this, &MainWindow::onReattach);
+
+    layout->addWidget(m_applyButton);
+    layout->addWidget(m_nextButton);
+    layout->addWidget(m_pauseButton);
+    layout->addWidget(stopBtn);
+    layout->addWidget(reattachBtn);
+    layout->addStretch(1);
+
+    // 右侧显示当前生效的壁纸名，方便确认播放控制作用于哪一项
+    m_currentLabel = new QLabel(QStringLiteral("未应用"), bar);
+    m_currentLabel->setObjectName(QStringLiteral("currentLabel"));
+    m_currentLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    layout->addWidget(m_currentLabel);
+
+    return bar;
 }
 
 // ---------------------------------------------------------------- 配置
@@ -896,12 +913,17 @@ void MainWindow::applyItem(const MediaItem& item)
     s.setValue(QStringLiteral("lastPath"), item.path);
     s.setValue(QStringLiteral("lastType"), item.type == MediaItem::Type::Video ? 1 : 0);
 
+    const QString name = QFileInfo(item.path).fileName();
+
     if (item.type == MediaItem::Type::Image) {
         const auto fit = static_cast<ImageFit>(m_fitCombo->currentData().toInt());
         QString err;
         if (m_engine.applyImage(item.path, fit, &err)) {
             Logger::info(QStringLiteral("图片壁纸已应用：%1（fit=%2）").arg(item.path).arg(static_cast<int>(fit)));
-            updateStatus(QStringLiteral("已应用图片壁纸：%1").arg(QFileInfo(item.path).fileName()));
+            updateStatus(QStringLiteral("已应用图片壁纸：%1").arg(name));
+            if (m_currentLabel) {
+                m_currentLabel->setText(QStringLiteral("图片 · %1").arg(name));
+            }
         } else {
             Logger::warning(QStringLiteral("图片壁纸应用失败：%1（%2）").arg(item.path, err));
             updateStatus(err, true);
@@ -917,9 +939,12 @@ void MainWindow::applyItem(const MediaItem& item)
         Logger::info(QStringLiteral("视频壁纸已应用：%1（volume=%2）")
                          .arg(item.path).arg(m_volumeSlider->value()));
         if (err.isEmpty()) {
-            updateStatus(QStringLiteral("已应用视频壁纸：%1").arg(QFileInfo(item.path).fileName()));
+            updateStatus(QStringLiteral("已应用视频壁纸：%1").arg(name));
         } else {
             updateStatus(err, true); // 降级模式：已生效但需提示
+        }
+        if (m_currentLabel) {
+            m_currentLabel->setText(QStringLiteral("视频 · %1").arg(name));
         }
     } else {
         Logger::warning(QStringLiteral("视频壁纸应用失败：%1（%2）").arg(item.path, err));
@@ -1068,6 +1093,9 @@ void MainWindow::onStop()
 {
     m_engine.stopVideo();
     updateFullscreenGuard();
+    if (m_currentLabel) {
+        m_currentLabel->setText(QStringLiteral("未应用"));
+    }
     updateStatus(QStringLiteral("视频壁纸已停止，桌面恢复为当前图片壁纸"));
 }
 

@@ -120,6 +120,7 @@ private:
     HWND m_workerW = nullptr;      // 桌面 WorkerW 层（视频壁纸张贴位置）
     HWND m_hostParent = nullptr;   // 宿主当前挂载到的父窗口（降级模式为 nullptr）
     HWND m_hostWnd = nullptr;      // 承载 VLC 画面的纯 Win32 宿主窗口
+    bool m_hostShown = false;      // 首帧渲染前保持隐藏，避免切换闪空白底
     QTimer* m_watchdog = nullptr;
 
     ScreenTarget m_target = ScreenTarget::Primary;
@@ -132,6 +133,7 @@ private:
     int m_volume = 0;
     qint64 m_lastTime = 0;         // 最近一次正常播放的位置（毫秒）
     int m_recoverFails = 0;        // 连续重挂失败计数，超过阈值即放弃并上报
+    int m_stallCount = 0;          // 播放位置连续未前进的看护周期数，用于卡死检测
 
     // 图片壁纸去重：三元组与上次完全一致时跳过系统调用
     QString m_lastImagePath;
