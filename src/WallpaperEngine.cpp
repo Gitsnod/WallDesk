@@ -2,6 +2,8 @@
 
 #include "WallpaperEngine.h"
 
+#include "Logger.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -39,7 +41,7 @@ HWND findWorkerWAfterDefView()
     return workerw;
 }
 
-/** 策略二：直接枚举顶层窗口，找类名为 WorkerW 且不含图标层的窗口。 */
+/** 策略二：直接枚举顶层窗口，找类名为 WorkerW 且可见、不含图标层的窗口。 */
 HWND findWorkerWByClass()
 {
     HWND found = nullptr;
@@ -50,6 +52,10 @@ HWND findWorkerWByClass()
                 return TRUE;
             }
             if (std::wstring(className) != L"WorkerW") {
+                return TRUE;
+            }
+            // 隐藏的孤儿层挂上去视频会隐身，直接排除
+            if (!IsWindowVisible(hwnd)) {
                 return TRUE;
             }
             // 排除承载图标的那一层
@@ -66,7 +72,8 @@ HWND findWorkerWByClass()
 /**
  * 桌面壁纸层定位。
  * 0x052C 是未公开的 Progman 消息，用于让资源管理器生成可分层的 WorkerW。
- * 部分环境（多桌面 / 第三方美化工具 / 资源管理器刚重启）需要重试才会生成。
+ * 注意：桌面上可能残留多个 WorkerW，其中老的是隐藏的孤儿层——挂上去视频
+ * 会跟着隐身（实测复现），所以只接受可见的候选层；实在没有就回退 Progman。
  */
 HWND findDesktopWorkerW()
 {
@@ -76,7 +83,9 @@ HWND findDesktopWorkerW()
             DWORD_PTR unused = 0;
             SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 500, &unused);
             if (HWND worker = findWorkerWAfterDefView()) {
-                return worker;
+                if (IsWindowVisible(worker)) {
+                    return worker;
+                }
             }
         }
     }
@@ -96,6 +105,13 @@ QString systemErrorMessage(DWORD code)
     const QString text = QString::fromWCharArray(buffer, static_cast<int>(length)).trimmed();
     LocalFree(buffer);
     return text;
+}
+
+constexpr wchar_t kHostClassName[] = L"WallDeskHostWnd";
+
+LRESULT CALLBACK hostWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 } // namespace
@@ -225,23 +241,36 @@ HWND WallpaperEngine::resolveWorkerW()
 
 /**
  * 确定宿主窗口的父窗口。
- * 优先挂在 WorkerW（图标之下）；资源管理器异常或第三方桌面工具占用时，
- * 依次降级到 Progman 子窗口、独立置底顶层窗口，保证视频仍能显示。
+ * 按可见性优先级依次尝试：
+ *   1. 老式可见顶层 WorkerW（Win7~Win10 常见；视频位于图标之下）；
+ *   2. Win11 新结构：无独立壁纸层，挂到 SHELLDLL_DefView（图标容器）下并
+ *      置顶其 Z 序 —— 视频可见但会覆盖桌面图标，属于 Win11 的结构性取舍；
+ *   3. Progman 直接子窗口（部分环境仍可见）；
+ *   4. 独立置底顶层窗口。
  */
 HWND WallpaperEngine::resolveHostParent()
 {
     if (HWND worker = resolveWorkerW()) {
         m_usingFallback = false;
+        m_hostOnDefView = false;
         return worker;
     }
 
     m_workerW = nullptr;
+
     if (HWND progman = FindWindowW(L"Progman", nullptr)) {
+        if (HWND defView = FindWindowExW(progman, nullptr, L"SHELLDLL_DefView", nullptr)) {
+            m_usingFallback = false;
+            m_hostOnDefView = true;
+            return defView;
+        }
         m_usingFallback = true;
+        m_hostOnDefView = false;
         return progman;
     }
 
     m_usingFallback = true;
+    m_hostOnDefView = false;
     return nullptr; // 独立顶层窗口，靠 Z 序置底
 }
 
@@ -266,37 +295,58 @@ QRect WallpaperEngine::targetRect() const
 
 bool WallpaperEngine::prepareHostWindow()
 {
-    if (!m_host) {
-        m_host = new QWidget(nullptr, Qt::Window);
-        m_host->setAttribute(Qt::WA_NativeWindow, true);
-        m_host->setAttribute(Qt::WA_NoSystemBackground, true);
-        // 不让 Qt 参与擦除与合成，画面由 VLC 直接输出到窗口，少一次多余的绘制
-        m_host->setAttribute(Qt::WA_OpaquePaintEvent, true);
-        m_host->setAttribute(Qt::WA_PaintOnScreen, true);
-        m_host->setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
-        m_host->setGeometry(0, 0, 1, 1);
-        m_host->createWinId();
+    static bool classRegistered = false;
+    if (!classRegistered) {
+        WNDCLASSEXW wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = hostWndProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = kHostClassName;
+        classRegistered = RegisterClassExW(&wc) != 0;
+    }
+
+    if (!m_hostWnd) {
+        // 宿主必须是纯 Win32 窗口：QWidget 挂 WA_PaintOnScreen 后其绘制管线
+        // 会让 libVLC 的画面在某些驱动下整窗黑屏（实测复现），原生窗口无此问题。
+        m_hostWnd = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                                    kHostClassName, L"WallDesk Video",
+                                    WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                                    0, 0, 1, 1, nullptr, nullptr,
+                                    GetModuleHandleW(nullptr), nullptr);
+        if (!m_hostWnd) {
+            Logger::warning(QStringLiteral("创建视频宿主窗口失败：%1").arg(GetLastError()));
+            return false;
+        }
     }
 
     m_hostParent = resolveHostParent();
-    HWND hwnd = reinterpret_cast<HWND>(m_host->winId());
 
     if (m_hostParent) {
-        if (GetParent(hwnd) != m_hostParent) {
-            SetParent(hwnd, m_hostParent);
+        if (GetParent(m_hostWnd) != m_hostParent) {
+            SetParent(m_hostWnd, m_hostParent);
         }
         // 子窗口形态：不抢焦点，且不干扰桌面图标
-        SetWindowLongPtrW(hwnd, GWL_STYLE,
+        SetWindowLongPtrW(m_hostWnd, GWL_STYLE,
                           WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+        SetWindowLongPtrW(m_hostWnd, GWL_EXSTYLE, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+
+        if (m_hostOnDefView) {
+            // Win11：DefView 的图标层（SysListView32）背景不透明，宿主必须排到
+            // 整个 DefView 子窗口链的最顶端，否则画面被图标层完全盖住（实测复现）。
+            // 注意 SetWindowPos 的第二参数是「排在该窗口之后（更低）」，
+            // 压到 listview 之下会被遮蔽，必须用 HWND_TOP。
+            SetWindowPos(m_hostWnd, HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
     } else {
         // 降级形态：独立顶层无边框窗口，靠 Z 序置底
-        if (GetParent(hwnd)) {
-            SetParent(hwnd, nullptr);
+        if (GetParent(m_hostWnd)) {
+            SetParent(m_hostWnd, nullptr);
         }
-        SetWindowLongPtrW(hwnd, GWL_STYLE,
+        SetWindowLongPtrW(m_hostWnd, GWL_STYLE,
                           WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+        SetWindowLongPtrW(m_hostWnd, GWL_EXSTYLE, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
     }
 
     refreshGeometry();
@@ -305,23 +355,21 @@ bool WallpaperEngine::prepareHostWindow()
 
 void WallpaperEngine::refreshGeometry()
 {
-    if (!m_host) {
+    if (!m_hostWnd) {
         return;
     }
     const QRect rect = targetRect();
-    HWND hwnd = reinterpret_cast<HWND>(m_host->winId());
     const UINT flags = m_hostParent
                            ? (SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOZORDER)
                            : (SWP_SHOWWINDOW | SWP_NOACTIVATE); // 置底仅对顶层窗口有意义
-    SetWindowPos(hwnd, HWND_BOTTOM, rect.x(), rect.y(), rect.width(), rect.height(), flags);
+    SetWindowPos(m_hostWnd, HWND_BOTTOM, rect.x(), rect.y(), rect.width(), rect.height(), flags);
 }
 
 void WallpaperEngine::destroyHostWindow()
 {
-    if (m_host) {
-        m_host->hide();
-        m_host->deleteLater();
-        m_host = nullptr;
+    if (m_hostWnd) {
+        DestroyWindow(m_hostWnd);
+        m_hostWnd = nullptr;
     }
     m_hostParent = nullptr;
 }
@@ -339,12 +387,30 @@ bool WallpaperEngine::applyVideo(const QString& path, int volume, QString* err)
         return false;
     }
 
-    prepareHostWindow(); // 降级模式下仍返回 true，只是视频会盖在图标之上
+    if (!prepareHostWindow()) {
+        if (err) {
+            *err = QStringLiteral("无法创建视频宿主窗口，请重试或重启程序。");
+        }
+        return false;
+    }
 
-    if (!m_vlc.play(path, reinterpret_cast<void*>(m_host->winId()), volume, true)) {
+    const QRect rect = targetRect();
+    const QString mode = m_usingFallback ? QStringLiteral("降级")
+                         : m_hostOnDefView ? QStringLiteral("DefView(Win11)")
+                                           : QStringLiteral("WorkerW");
+    Logger::info(QStringLiteral("视频宿主窗口：hwnd=0x%1 父窗口=0x%2 区域=%3x%4%5 模式=%6")
+                     .arg(reinterpret_cast<quintptr>(m_hostWnd), 0, 16)
+                     .arg(reinterpret_cast<quintptr>(m_hostParent), 0, 16)
+                     .arg(rect.width())
+                     .arg(rect.height())
+                     .arg(QStringLiteral("(%1,%2)").arg(rect.x()).arg(rect.y()))
+                     .arg(mode));
+
+    if (!m_vlc.play(path, reinterpret_cast<void*>(m_hostWnd), volume, true)) {
         if (err) {
             *err = QStringLiteral("libVLC 无法播放该文件（编码可能不受支持）：%1").arg(path);
         }
+        Logger::warning(QStringLiteral("libVLC 起播失败：%1").arg(path));
         destroyHostWindow();
         return false;
     }
@@ -410,7 +476,7 @@ void WallpaperEngine::setTarget(ScreenTarget target, int monitorIndex)
 {
     m_target = target;
     m_monitorIndex = monitorIndex;
-    if (m_host) {
+    if (m_hostWnd) {
         refreshGeometry();
     }
 }
@@ -505,18 +571,19 @@ void WallpaperEngine::updateWatchdogInterval()
 
 void WallpaperEngine::onWatchdog()
 {
-    if (!m_host) {
+    if (!m_hostWnd) {
         stopWatchdog();
         return;
     }
 
-    const HWND hwnd = reinterpret_cast<HWND>(m_host->winId());
+    const HWND hwnd = m_hostWnd;
     const bool hostAlive = IsWindow(hwnd);
     const bool parentAlive = m_hostParent ? IsWindow(m_hostParent) : true;
     const bool stillAttached = m_hostParent ? (GetParent(hwnd) == m_hostParent) : true;
+    // 桌面层被 explorer 隐藏（重建/切换）时同样需要重挂，否则视频跟着隐身
+    const bool parentVisible = m_hostParent ? IsWindowVisible(m_hostParent) : true;
 
-    // 资源管理器重启、桌面层重建、宿主被剥离都会走到这里
-    if (!hostAlive || !parentAlive || !stillAttached) {
+    if (!hostAlive || !parentAlive || !parentVisible || !stillAttached) {
         reattach();
         return;
     }
@@ -531,8 +598,16 @@ void WallpaperEngine::onWatchdog()
         updateWatchdogInterval(); // 状态已稳定，回到常规间隔
         return;
     }
-    if (current == PlaybackState::Error || current == PlaybackState::Ended) {
-        reattach();
+    if (current == PlaybackState::Ended) {
+        // 实测 input-repeat 在部分文件上不生效，播完就地重播，不重建窗口避免闪烁
+        Logger::info(QStringLiteral("视频播放到结尾，自动重新循环"));
+        m_vlc.play(m_currentFile, reinterpret_cast<void*>(m_hostWnd), m_volume, true);
+        return;
     }
-    // Opening / Buffering 属于正常中间态，不干预
+    if (current == PlaybackState::Error) {
+        Logger::warning(QStringLiteral("播放状态异常（Error），尝试重新挂载"));
+        reattach();
+        return;
+    }
+    Logger::info(QStringLiteral("播放状态：%1（等待起播）").arg(static_cast<int>(current)));
 }

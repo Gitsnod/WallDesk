@@ -122,15 +122,31 @@ bool VlcPlayer::loadFromDirectory(const QString& dir, QString* err)
 
 bool VlcPlayer::tryLoadLibrary(const QString& dir, QString* err)
 {
-    const QString libPath = dir.isEmpty()
-                                ? QStringLiteral("libvlc.dll")
-                                : QDir::toNativeSeparators(dir) + QStringLiteral("\\libvlc.dll");
+    // 显式目录加载时，libvlc.dll 的依赖（libvlccore.dll）默认不会从该目录解析——
+    // Windows 只搜程序目录/系统目录/PATH，这正是错误码 126（模块未找到）的根因。
+    // 用 LOAD_WITH_ALTERED_SEARCH_PATH 让加载器改搜 DLL 自身所在目录，
+    // 并先显式加载 libvlccore.dll，双保险。
+    QString libPath = QStringLiteral("libvlc.dll");
+    DWORD loadFlags = 0;
+    if (!dir.isEmpty()) {
+        const QString nativeDir = QDir::toNativeSeparators(dir);
+        const std::wstring corePath =
+            (nativeDir + QStringLiteral("\\libvlccore.dll")).toStdWString();
+        m_coreDll = LoadLibraryExW(corePath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        // core 加载失败不立即返回：某些目录结构下 libvlc 可能静态内联 core，交给下面统一判
+        libPath = nativeDir + QStringLiteral("\\libvlc.dll");
+        loadFlags = LOAD_WITH_ALTERED_SEARCH_PATH;
+    }
     const std::wstring widePath = libPath.toStdWString();
-    m_dll = LoadLibraryW(widePath.c_str());
+    m_dll = LoadLibraryExW(widePath.c_str(), nullptr, loadFlags);
 
     if (!m_dll) {
         if (err) {
             *err = QStringLiteral("未能加载 %1（错误码 %2）。").arg(libPath).arg(GetLastError());
+        }
+        if (m_coreDll) {
+            FreeLibrary(m_coreDll);
+            m_coreDll = nullptr;
         }
         return false;
     }
@@ -141,6 +157,10 @@ bool VlcPlayer::tryLoadLibrary(const QString& dir, QString* err)
         }
         FreeLibrary(m_dll);
         m_dll = nullptr;
+        if (m_coreDll) {
+            FreeLibrary(m_coreDll);
+            m_coreDll = nullptr;
+        }
         return false;
     }
 
@@ -161,6 +181,10 @@ bool VlcPlayer::tryLoadLibrary(const QString& dir, QString* err)
         }
         FreeLibrary(m_dll);
         m_dll = nullptr;
+        if (m_coreDll) {
+            FreeLibrary(m_coreDll);
+            m_coreDll = nullptr;
+        }
         return false;
     }
 
@@ -459,5 +483,9 @@ void VlcPlayer::release()
     if (m_dll) {
         FreeLibrary(m_dll);
         m_dll = nullptr;
+    }
+    if (m_coreDll) {
+        FreeLibrary(m_coreDll);
+        m_coreDll = nullptr;
     }
 }

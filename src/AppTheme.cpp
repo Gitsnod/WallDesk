@@ -178,6 +178,32 @@ QMenu { background: {card}; border: 1px solid {border}; border-radius: 8px; padd
 QMenu::item { padding: 6px 20px; border-radius: 6px; }
 QMenu::item:selected { background: {accentSoft}; }
 QToolTip { background: {tooltipBase}; color: {tooltipText}; border: none; padding: 5px 8px; }
+
+/* ---- 菜单栏与状态栏（V4.1 分级布局） ---- */
+QMenuBar { background: {window}; border-bottom: 1px solid {border}; padding: 2px 8px; }
+QMenuBar::item { padding: 5px 10px; border-radius: 6px; background: transparent; }
+QMenuBar::item:selected { background: {hover}; }
+QStatusBar { background: {window}; color: {subText}; border-top: 1px solid {border}; }
+QStatusBar::item { border: none; }
+QStatusBar QLabel { padding: 0 4px; }
+
+/* ---- 左侧导航栏 ---- */
+QListWidget#navRail {
+    background: {window};
+    border: none;
+    border-right: 1px solid {border};
+    padding: 12px 8px;
+    outline: none;
+    font-weight: 600;
+}
+QListWidget#navRail::item {
+    padding: 10px 12px;
+    margin: 2px 4px;
+    border-radius: 8px;
+    color: {subText};
+}
+QListWidget#navRail::item:hover { background: {hover}; color: {text}; }
+QListWidget#navRail::item:selected { background: {accentSoft}; color: {text}; }
 )";
 
 /** 把 {key} 占位符替换成实际色值。用花括号而非 %1，避免 QString::arg 的参数个数限制。 */

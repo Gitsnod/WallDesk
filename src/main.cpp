@@ -2,6 +2,7 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QObject>
 
 #include "AppPaths.h"
@@ -11,6 +12,10 @@
 
 int main(int argc, char* argv[])
 {
+    // 缩放自适应：Qt6 默认把缩放系数取整，这里放开为原值，125%/150% 下不再模糊或跳变
+    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);

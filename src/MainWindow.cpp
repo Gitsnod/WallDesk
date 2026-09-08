@@ -10,6 +10,7 @@
 #include "ThumbnailLoader.h"
 #include "VlcBundle.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
@@ -29,7 +30,9 @@
 #include <QIcon>
 #include <QLabel>
 #include <QListWidget>
+#include <QListView>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
@@ -40,7 +43,8 @@
 #include <QSize>
 #include <QSlider>
 #include <QSpinBox>
-#include <QSplitter>
+#include <QStackedWidget>
+#include <QStatusBar>
 #include <QStyle>
 #include <QTimer>
 #include <QUrl>
@@ -81,7 +85,11 @@ MainWindow::MainWindow(QWidget* parent)
 {
     setWindowTitle(QStringLiteral("WallDesk — 图片 / 视频壁纸"));
     setWindowIcon(appIcon());
-    resize(900, 640);
+    // 缩放自适应：下限随系统字体走，默认尺寸在 125%/150% DPI 下也放得下
+    setMinimumSize(QSize(760, 520).expandedTo(
+        QSize(fontMetrics().horizontalAdvance(QStringLiteral("WallDesk — 图片 / 视频壁纸")) * 3 / 2,
+              fontMetrics().height() * 30)));
+    resize(980, 680);
 
     m_thumbs = new ThumbnailLoader(this);
     connect(m_thumbs, &ThumbnailLoader::ready, this, &MainWindow::onThumbnailReady);
@@ -146,94 +154,192 @@ void MainWindow::setupTray()
 
 // ---------------------------------------------------------------- 界面构建
 
+namespace {
+
+/** 画廊导航 / 设置页图标：程序内自绘，不依赖资源文件。 */
+QIcon drawNavIcon(const QColor& accent, bool gallery)
+{
+    QPixmap pm(48, 48);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+    p.setBrush(accent);
+    if (gallery) {
+        p.drawRoundedRect(6, 8, 36, 32, 6, 6);
+        p.setBrush(QColor(255, 255, 255, 220));
+        p.drawRoundedRect(11, 13, 26, 15, 3, 3);
+        p.setBrush(QColor(255, 255, 255, 180));
+        p.drawRoundedRect(11, 31, 26, 4, 2, 2);
+    } else {
+        // 三根滑杆，示意“设置”
+        for (int i = 0; i < 3; ++i) {
+            const int y = 14 + i * 10;
+            p.setBrush(accent);
+            p.drawRoundedRect(8, y - 2, 32, 4, 2, 2);
+            p.setBrush(Qt::white);
+            p.drawEllipse(16 + i * 8 - 4, y - 5, 9, 9);
+        }
+    }
+    p.end();
+    return QIcon(pm);
+}
+
+} // namespace
+
 void MainWindow::buildUi()
 {
     auto* central = new QWidget(this);
-    auto* root = new QVBoxLayout(central);
-    root->setContentsMargins(16, 14, 16, 12);
-    root->setSpacing(12);
+    auto* root = new QHBoxLayout(central);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
 
-    // ---- 标题栏 ----
-    auto* header = new QHBoxLayout();
-    auto* title = new QLabel(QStringLiteral("WallDesk"), central);
-    title->setObjectName(QStringLiteral("titleLabel"));
-    auto* subtitle = new QLabel(QStringLiteral("图片 / 视频壁纸"), central);
-    subtitle->setObjectName(QStringLiteral("statusLabel"));
-    header->addWidget(title);
-    header->addSpacing(8);
-    header->addWidget(subtitle);
-    header->addStretch(1);
-    header->addWidget(new QLabel(QStringLiteral("外观"), central));
-    m_themeCombo = new QComboBox(central);
-    m_themeCombo->addItems(AppTheme::displayNames());
-    connect(m_themeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onThemeChanged);
-    header->addWidget(m_themeCombo);
-    root->addLayout(header);
+    // ---- 左侧导航栏（分级入口：库 / 设置）----
+    m_nav = new QListWidget(central);
+    m_nav->setObjectName(QStringLiteral("navRail"));
+    m_nav->setViewMode(QListView::ListMode);
+    m_nav->setFlow(QListView::TopToBottom);
+    m_nav->setWrapping(false);
+    m_nav->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_nav->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_nav->setFixedWidth(128);
+    m_nav->setIconSize(QSize(24, 24));
+    const QColor accent(0x25, 0x63, 0xeb);
+    new QListWidgetItem(drawNavIcon(accent, true),
+                        QStringLiteral("壁纸库"), m_nav);
+    new QListWidgetItem(drawNavIcon(accent, false),
+                        QStringLiteral("设置"), m_nav);
+    connect(m_nav, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (m_pages) {
+            m_pages->setCurrentIndex(row);
+        }
+    });
+    root->addWidget(m_nav);
 
-    // ---- 主体：左画廊 / 右设置 ----
-    auto* splitter = new QSplitter(Qt::Horizontal, central);
-    splitter->addWidget(buildGalleryPane());
-    splitter->addWidget(buildSettingsPane());
-    splitter->setStretchFactor(0, 3);
-    splitter->setStretchFactor(1, 2);
-    splitter->setSizes({430, 300});
-    root->addWidget(splitter, 1);
+    // ---- 右侧页面栈 ----
+    m_pages = new QStackedWidget(central);
+    m_pages->addWidget(buildLibraryPage());
+    m_pages->addWidget(buildSettingsPage());
+    root->addWidget(m_pages, 1);
 
-    // ---- 操作按钮 ----
+    setCentralWidget(central);
+
+    buildMenus();
+
+    // ---- 状态栏：状态文字 + 后台任务指示 ----
+    m_busy = new QProgressBar(this);
+    m_busy->setRange(0, 0); // 不确定进度：只在解包内置运行时出现
+    m_busy->setFixedSize(120, 6);
+    m_busy->setVisible(false);
+    statusBar()->addWidget(m_busy);
+
+    m_status = new QLabel(QStringLiteral("就绪"), this);
+    m_status->setObjectName(QStringLiteral("statusLabel"));
+    m_status->setWordWrap(true);
+    m_status->setProperty("warn", false);
+    statusBar()->addWidget(m_status, 1);
+
+    statusBar()->showMessage(QString());
+    m_nav->setCurrentRow(0);
+}
+
+void MainWindow::buildMenus()
+{
+    QMenuBar* mb = menuBar();
+
+    // ---- 文件 ----
+    QMenu* fileMenu = mb->addMenu(QStringLiteral("文件(&F)"));
+    fileMenu->addAction(QStringLiteral("添加图片(&I)…"), QKeySequence(QStringLiteral("Ctrl+Shift+I")),
+                        this, &MainWindow::onAddImages);
+    fileMenu->addAction(QStringLiteral("添加视频(&V)…"), QKeySequence(QStringLiteral("Ctrl+Shift+V")),
+                        this, &MainWindow::onAddVideos);
+    fileMenu->addSeparator();
+    fileMenu->addAction(QStringLiteral("打开数据目录"), this, [this] {
+        openFolder(AppPaths::dataDir());
+    });
+    fileMenu->addAction(QStringLiteral("打开日志目录"), this, [this] {
+        openFolder(Logger::logDir());
+    });
+    fileMenu->addSeparator();
+    fileMenu->addAction(QStringLiteral("退出(&X)"), QKeySequence(QStringLiteral("Ctrl+Q")),
+                        this, &MainWindow::onQuit);
+
+    // ---- 播放 ----
+    QMenu* playMenu = mb->addMenu(QStringLiteral("播放(&P)"));
+    playMenu->addAction(QStringLiteral("应用选中(&A)"), QKeySequence(QStringLiteral("Return")),
+                        this, &MainWindow::onApplySelected);
+    playMenu->addAction(QStringLiteral("下一张(&N)"), QKeySequence(QStringLiteral("Ctrl+N")),
+                        this, &MainWindow::onNext);
+    m_actPause = playMenu->addAction(QStringLiteral("暂停视频"), QKeySequence(QStringLiteral("Ctrl+P")),
+                                     this, &MainWindow::onTogglePause);
+    playMenu->addAction(QStringLiteral("停止壁纸(&S)"), this, &MainWindow::onStop);
+    playMenu->addSeparator();
+    playMenu->addAction(QStringLiteral("重新挂载桌面层(&R)"), QKeySequence(QStringLiteral("F5")),
+                        this, &MainWindow::onReattach);
+
+    // ---- 视图 ----
+    QMenu* viewMenu = mb->addMenu(QStringLiteral("视图(&V)"));
+    QMenu* themeMenu = viewMenu->addMenu(QStringLiteral("主题(&T)"));
+    const QStringList themeNames = {QStringLiteral("浅色"), QStringLiteral("深色"),
+                                    QStringLiteral("跟随系统")};
+    for (int i = 0; i < themeNames.size(); ++i) {
+        QAction* action = themeMenu->addAction(themeNames.at(i), this,
+                                               [this, i] { onThemeChanged(i); });
+        action->setCheckable(true);
+        m_themeActions.append(action);
+    }
+
+    viewMenu->addSeparator();
+    viewMenu->addAction(QStringLiteral("壁纸库"), QKeySequence(QStringLiteral("Ctrl+1")), this, [this] {
+        m_nav->setCurrentRow(0);
+    });
+    viewMenu->addAction(QStringLiteral("设置"), QKeySequence(QStringLiteral("Ctrl+2")), this, [this] {
+        m_nav->setCurrentRow(1);
+    });
+
+    // ---- 帮助 ----
+    QMenu* helpMenu = mb->addMenu(QStringLiteral("帮助(&H)"));
+    helpMenu->addAction(QStringLiteral("清理缩略图缓存"), this, &MainWindow::onClearThumbCache);
+    helpMenu->addSeparator();
+    helpMenu->addAction(QStringLiteral("关于 WallDesk(&A)"), this, &MainWindow::onAbout);
+}
+
+QWidget* MainWindow::buildLibraryPage()
+{
+    auto* pane = new QWidget(this);
+    auto* layout = new QVBoxLayout(pane);
+    layout->setContentsMargins(16, 14, 16, 12);
+    layout->setSpacing(10);
+
+    // ---- 播放工具条 ----
     auto* actions = new QHBoxLayout();
-    auto* applyBtn = new QPushButton(QStringLiteral("应用选中"), central);
+    auto* applyBtn = new QPushButton(QStringLiteral("应用选中"), pane);
     applyBtn->setObjectName(QStringLiteral("primary"));
-    auto* nextBtn = new QPushButton(QStringLiteral("下一张"), central);
-    m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), central);
-    auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), central);
-    auto* aboutBtn = new QPushButton(QStringLiteral("关于"), central);
+    auto* nextBtn = new QPushButton(QStringLiteral("下一张"), pane);
+    m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), pane);
+    auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), pane);
     connect(applyBtn, &QPushButton::clicked, this, &MainWindow::onApplySelected);
     connect(nextBtn, &QPushButton::clicked, this, &MainWindow::onNext);
     connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onTogglePause);
     connect(stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
-    connect(aboutBtn, &QPushButton::clicked, this, &MainWindow::onAbout);
     actions->addWidget(applyBtn);
     actions->addWidget(nextBtn);
     actions->addWidget(m_pauseButton);
     actions->addWidget(stopBtn);
     actions->addStretch(1);
-    actions->addWidget(aboutBtn);
-    root->addLayout(actions);
+    auto* clearBtn = new QPushButton(QStringLiteral("清空"), pane);
+    clearBtn->setObjectName(QStringLiteral("danger"));
+    auto* removeBtn = new QPushButton(QStringLiteral("移除"), pane);
+    removeBtn->setObjectName(QStringLiteral("danger"));
+    connect(removeBtn, &QPushButton::clicked, this, &MainWindow::onRemoveSelected);
+    connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearAll);
+    actions->addWidget(removeBtn);
+    actions->addWidget(clearBtn);
+    layout->addLayout(actions);
 
-    // ---- 底部状态 ----
-    m_busy = new QProgressBar(central);
-    m_busy->setRange(0, 0); // 不确定进度：只在解包内置运行时出现
-    m_busy->setFixedHeight(6);
-    m_busy->setVisible(false);
-    root->addWidget(m_busy);
-
-    m_status = new QLabel(QStringLiteral("就绪"), central);
-    m_status->setObjectName(QStringLiteral("statusLabel"));
-    m_status->setWordWrap(true);
-    m_status->setProperty("warn", false);
-    root->addWidget(m_status);
-
-    m_backendLabel = new QLabel(QStringLiteral("视频后端：未加载"), central);
-    m_backendLabel->setObjectName(QStringLiteral("statusLabel"));
-    m_backendLabel->setWordWrap(true);
-    root->addWidget(m_backendLabel);
-
-    setCentralWidget(central);
-}
-
-QWidget* MainWindow::buildGalleryPane()
-{
-    auto* pane = new QWidget(this);
-    auto* layout = new QVBoxLayout(pane);
-    layout->setContentsMargins(0, 0, 8, 0);
-    layout->setSpacing(10);
-
+    // ---- 画廊 ----
     m_list = new QListWidget(pane);
     m_list->setViewMode(QListWidget::IconMode);
-    m_list->setIconSize(kThumbSize);
-    m_list->setGridSize(kGridSize);
-    m_list->setSpacing(6);
     m_list->setMovement(QListWidget::Static);
     m_list->setResizeMode(QListWidget::Adjust);
     m_list->setWrapping(true);
@@ -241,31 +347,25 @@ QWidget* MainWindow::buildGalleryPane()
     m_list->setTextElideMode(Qt::ElideMiddle);
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
     m_list->setContextMenuPolicy(Qt::NoContextMenu);
+    m_list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     connect(m_list, &QListWidget::itemDoubleClicked, this, [this]() { onApplySelected(); });
     layout->addWidget(m_list, 1);
 
+    // ---- 库管理条 ----
     auto* row = new QHBoxLayout();
     auto* addImageBtn = new QPushButton(QStringLiteral("添加图片"), pane);
     auto* addVideoBtn = new QPushButton(QStringLiteral("添加视频"), pane);
-    auto* removeBtn = new QPushButton(QStringLiteral("移除"), pane);
-    removeBtn->setObjectName(QStringLiteral("danger"));
-    auto* clearBtn = new QPushButton(QStringLiteral("清空"), pane);
-    clearBtn->setObjectName(QStringLiteral("danger"));
     connect(addImageBtn, &QPushButton::clicked, this, &MainWindow::onAddImages);
     connect(addVideoBtn, &QPushButton::clicked, this, &MainWindow::onAddVideos);
-    connect(removeBtn, &QPushButton::clicked, this, &MainWindow::onRemoveSelected);
-    connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearAll);
     row->addWidget(addImageBtn);
     row->addWidget(addVideoBtn);
     row->addStretch(1);
-    row->addWidget(removeBtn);
-    row->addWidget(clearBtn);
     layout->addLayout(row);
 
     return pane;
 }
 
-QWidget* MainWindow::buildSettingsPane()
+QWidget* MainWindow::buildSettingsPage()
 {
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
@@ -274,8 +374,8 @@ QWidget* MainWindow::buildSettingsPane()
 
     auto* pane = new QWidget(scroll);
     auto* layout = new QVBoxLayout(pane);
-    layout->setContentsMargins(6, 0, 0, 0);
-    layout->setSpacing(4);
+    layout->setContentsMargins(16, 14, 16, 12);
+    layout->setSpacing(10);
 
     // ---- 图片 ----
     auto* imageBox = new QGroupBox(QStringLiteral("图片"), pane);
@@ -424,13 +524,18 @@ void MainWindow::loadSettings()
     m_screenCombo->blockSignals(true);
     m_monitorCombo->blockSignals(true);
     m_profileCombo->blockSignals(true);
-    m_themeCombo->blockSignals(true);
+    for (QAction* action : m_themeActions) {
+        action->blockSignals(true);
+    }
 
     m_fitCombo->setCurrentIndex(s.value(QStringLiteral("fit"), 0).toInt());
     m_screenCombo->setCurrentIndex(s.value(QStringLiteral("screen"), 1).toInt());
     m_monitorCombo->setCurrentIndex(s.value(QStringLiteral("monitor"), 0).toInt());
     m_profileCombo->setCurrentIndex(s.value(QStringLiteral("profile"), 0).toInt());
-    m_themeCombo->setCurrentIndex(s.value(QStringLiteral("theme"), 2).toInt());
+    const int themeIndex = s.value(QStringLiteral("theme"), 2).toInt();
+    for (int i = 0; i < m_themeActions.size(); ++i) {
+        m_themeActions.at(i)->setChecked(i == themeIndex);
+    }
     m_volumeSlider->setValue(s.value(QStringLiteral("volume"), 0).toInt());
     m_intervalSpin->setValue(s.value(QStringLiteral("interval"), 30).toInt());
     m_autoSwitch->setChecked(s.value(QStringLiteral("autoSwitch"), false).toBool());
@@ -445,9 +550,19 @@ void MainWindow::loadSettings()
     m_screenCombo->blockSignals(false);
     m_monitorCombo->blockSignals(false);
     m_profileCombo->blockSignals(false);
-    m_themeCombo->blockSignals(false);
+    for (QAction* action : m_themeActions) {
+        action->blockSignals(false);
+    }
 
-    m_theme = AppTheme::fromIndex(m_themeCombo->currentIndex());
+    // 窗口几何与导航页：缩放自适应的记忆部分
+    const QByteArray geo = s.value(QStringLiteral("winGeometry")).toByteArray();
+    if (!geo.isEmpty()) {
+        restoreGeometry(geo);
+    }
+    m_nav->setCurrentRow(s.value(QStringLiteral("winPage"), 0).toInt());
+    adaptGalleryDensity();
+
+    m_theme = AppTheme::fromIndex(themeIndex);
     m_engine.setPerformanceProfile(
         static_cast<VlcProfile>(m_profileCombo->currentData().toInt()));
 
@@ -471,7 +586,14 @@ void MainWindow::saveSettings()
     s.setValue(QStringLiteral("screen"), m_screenCombo->currentIndex());
     s.setValue(QStringLiteral("monitor"), m_monitorCombo->currentIndex());
     s.setValue(QStringLiteral("profile"), m_profileCombo->currentIndex());
-    s.setValue(QStringLiteral("theme"), m_themeCombo->currentIndex());
+    for (int i = 0; i < m_themeActions.size(); ++i) {
+        if (m_themeActions.at(i)->isChecked()) {
+            s.setValue(QStringLiteral("theme"), i);
+            break;
+        }
+    }
+    s.setValue(QStringLiteral("winGeometry"), saveGeometry());
+    s.setValue(QStringLiteral("winPage"), m_nav->currentIndex().row());
     s.setValue(QStringLiteral("volume"), m_volumeSlider->value());
     s.setValue(QStringLiteral("interval"), m_intervalSpin->value());
     s.setValue(QStringLiteral("autoSwitch"), m_autoSwitch->isChecked());
@@ -560,16 +682,46 @@ void MainWindow::applyTheme()
     AppTheme::apply(m_theme);
 }
 
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    adaptGalleryDensity();
+}
+
+void MainWindow::adaptGalleryDensity()
+{
+    if (!m_list) {
+        return;
+    }
+    // 自适应密度：可用宽度决定列数，缩略图尺寸在 120~200 逻辑像素间滑动
+    const int available = m_list->viewport()->width() - 24;
+    if (available < 160) {
+        return;
+    }
+    int cols = qBound(3, available / 200, 8);
+    while (cols > 3 && available / cols < 130) {
+        --cols;
+    }
+    const int cell = qBound(120, available / cols - 14, 200);
+    const QSize thumb(cell, cell * 5 / 8);
+    const QSize grid(cell + 14, cell * 5 / 8 + 28);
+    if (m_list->iconSize() != thumb) {
+        m_list->setIconSize(thumb);
+        m_list->setGridSize(grid);
+    }
+}
+
 void MainWindow::refreshBackendInfo()
 {
+    // 后端状态只落日志与「关于」，主界面不再显示 libvlc 路径（V4.1 起隐藏）
     if (m_engine.videoBackendReady()) {
         const QString path = m_engine.backendPath();
         const bool bundled = VlcBundle::available()
                              && path.startsWith(VlcBundle::cacheDir(), Qt::CaseInsensitive);
-        m_backendLabel->setText(QStringLiteral("视频后端：%1%2")
-                                    .arg(path, bundled ? QStringLiteral("（内置）") : QString()));
+        Logger::info(QStringLiteral("视频后端已加载：%1%2")
+                         .arg(path, bundled ? QStringLiteral("（内置）") : QString()));
     } else {
-        m_backendLabel->setText(QStringLiteral("视频后端：未加载 libVLC（仅图片壁纸可用）"));
+        Logger::warning(QStringLiteral("视频后端未加载，仅图片壁纸可用"));
     }
 }
 
@@ -578,18 +730,29 @@ void MainWindow::applyVideoPaused(bool paused, bool byPolicy)
     m_videoPaused = paused;
     m_pausedByPolicy = paused ? byPolicy : false;
     m_engine.setVideoPaused(paused);
-    m_pauseButton->setText(paused ? QStringLiteral("继续视频") : QStringLiteral("暂停视频"));
+    const QString text = paused ? QStringLiteral("继续视频") : QStringLiteral("暂停视频");
+    m_pauseButton->setText(text);
+    if (m_actPause) {
+        m_actPause->setText(text);
+    }
     updateFullscreenGuard();
 }
 
 void MainWindow::maybeRestoreLast()
 {
-    if (!m_restoreLast->isChecked()) {
+    QSettings s;
+    const bool want = m_restoreLast->isChecked();
+    const QString path = s.value(QStringLiteral("lastPath")).toString();
+    Logger::info(QStringLiteral("恢复检查：restoreLast=%1 path=%2 type=%3 exists=%4")
+                     .arg(want ? QStringLiteral("开") : QStringLiteral("关"),
+                          path.isEmpty() ? QStringLiteral("(空)") : path,
+                          s.value(QStringLiteral("lastType")).toString(),
+                          QFileInfo::exists(path) ? QStringLiteral("是") : QStringLiteral("否")));
+    if (!want) {
         return;
     }
-    QSettings s;
-    const QString path = s.value(QStringLiteral("lastPath")).toString();
     if (path.isEmpty() || !QFileInfo::exists(path)) {
+        Logger::info(QStringLiteral("未恢复上次壁纸：路径为空或文件不存在（%1）").arg(path));
         return;
     }
     MediaItem item;
@@ -631,6 +794,7 @@ void MainWindow::applyItem(const MediaItem& item)
             updateStatus(err, true); // 降级模式：已生效但需提示
         }
     } else {
+        Logger::warning(QStringLiteral("视频壁纸应用失败：%1（%2）").arg(item.path, err));
         updateStatus(err, true);
     }
 }
@@ -937,9 +1101,10 @@ void MainWindow::onVideoRecovered()
 
 void MainWindow::onAbout()
 {
+    // 不展示 libvlc 的具体路径，只给状态与修复指引
     const QString backend = m_engine.videoBackendReady()
-                                ? m_engine.backendPath()
-                                : QStringLiteral("未加载（仅图片壁纸可用）");
+                                ? QStringLiteral("已加载")
+                                : QStringLiteral("未加载（仅图片壁纸可用，可到 设置 → 定位 libvlc 修复）");
     QMessageBox box(this);
     box.setWindowTitle(QStringLiteral("关于 WallDesk"));
     box.setIconPixmap(appIcon().pixmap(64, 64));

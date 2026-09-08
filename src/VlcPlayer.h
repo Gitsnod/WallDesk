@@ -94,6 +94,7 @@ private:
     QStringList instanceArguments() const;
 
     HMODULE m_dll = nullptr;
+    HMODULE m_coreDll = nullptr; // libvlccore.dll（显式目录加载时先行载入，见 cpp 注释）
     QString m_libPath;    // 命中的 libvlc.dll 路径
     QString m_pluginDir;  // 命中的 plugins 目录
     VlcProfile m_profile = VlcProfile::Auto;

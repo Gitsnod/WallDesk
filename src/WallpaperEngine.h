@@ -4,7 +4,6 @@
 #include <QObject>
 #include <QRect>
 #include <QString>
-#include <QWidget>
 
 #include "VlcPlayer.h"
 
@@ -92,7 +91,7 @@ public:
     void stopVideo();
     void setVideoPaused(bool paused);
     void setVideoVolume(int volume);
-    bool isVideoActive() const { return m_host != nullptr && m_vlc.isPlaying(); }
+    bool isVideoActive() const { return m_hostWnd != nullptr && m_vlc.isPlaying(); }
     bool isFallbackMode() const { return m_usingFallback; }
     PlaybackState videoState() const { return m_vlc.state(); }
     QString currentVideo() const { return m_currentFile; }
@@ -120,12 +119,13 @@ private:
     VlcPlayer m_vlc;
     HWND m_workerW = nullptr;      // 桌面 WorkerW 层（视频壁纸张贴位置）
     HWND m_hostParent = nullptr;   // 宿主当前挂载到的父窗口（降级模式为 nullptr）
-    QWidget* m_host = nullptr;     // 承载 VLC 画面的宿主窗口
+    HWND m_hostWnd = nullptr;      // 承载 VLC 画面的纯 Win32 宿主窗口
     QTimer* m_watchdog = nullptr;
 
     ScreenTarget m_target = ScreenTarget::Primary;
     int m_monitorIndex = 0;
     bool m_usingFallback = false;  // WorkerW 不可用，已降级为置底顶层窗口
+    bool m_hostOnDefView = false;  // Win11 模式：宿主挂在 SHELLDLL_DefView 下
     bool m_pausedByUser = false;
 
     QString m_currentFile;         // 当前视频，供重挂续播使用

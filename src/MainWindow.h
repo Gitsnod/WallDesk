@@ -11,6 +11,7 @@
 class DesktopWatcher;
 class FullscreenGuard;
 class ThumbnailLoader;
+class QAction;
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -20,6 +21,7 @@ class QProgressBar;
 class QPushButton;
 class QSlider;
 class QSpinBox;
+class QStackedWidget;
 class QTimer;
 
 struct MediaItem {
@@ -52,6 +54,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private slots:
     void onAddImages();
@@ -87,8 +90,11 @@ private slots:
 
 private:
     void buildUi();
-    QWidget* buildGalleryPane();
-    QWidget* buildSettingsPane();
+    void buildMenus();
+    QWidget* buildLibraryPage();
+    QWidget* buildSettingsPage();
+    /** 依据窗口宽度自适应画廊缩略图密度（V4.1 缩放自适应）。 */
+    void adaptGalleryDensity();
     void setupWatcher();
     void setupTray();
     void loadSettings();
@@ -121,11 +127,14 @@ private:
     FullscreenGuard* m_fullscreen = nullptr;
 
     QListWidget* m_list = nullptr;
+    QListWidget* m_nav = nullptr;
+    QStackedWidget* m_pages = nullptr;
     QComboBox* m_fitCombo = nullptr;
     QComboBox* m_screenCombo = nullptr;
     QComboBox* m_monitorCombo = nullptr;
-    QComboBox* m_themeCombo = nullptr;
     QComboBox* m_profileCombo = nullptr;
+    QList<QAction*> m_themeActions;
+    QAction* m_actPause = nullptr;
     QSpinBox* m_intervalSpin = nullptr;
     QSlider* m_volumeSlider = nullptr;
     QCheckBox* m_autoSwitch = nullptr;
@@ -137,7 +146,6 @@ private:
     QCheckBox* m_restoreLast = nullptr;
     QCheckBox* m_portable = nullptr;
     QLabel* m_status = nullptr;
-    QLabel* m_backendLabel = nullptr;
     QProgressBar* m_busy = nullptr;
     QPushButton* m_pauseButton = nullptr;
 
