@@ -299,6 +299,7 @@ bool VlcPlayer::play(const QString& file, void* hwnd, int volume, bool loop)
 
     if (loop) {
         libvlc_media_add_option_(media, "input-repeat=-1"); // -1 = 无限循环
+        libvlc_media_add_option_(media, ":input-fast-seek=1"); // seek 到 0 更快，片尾衔接更顺
     }
     // 只对本地文件播放做最小缓冲，降低起播延迟
     libvlc_media_add_option_(media, ":file-caching=300");

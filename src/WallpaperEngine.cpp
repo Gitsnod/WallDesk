@@ -18,7 +18,7 @@ namespace {
 /** 上限：连续重挂失败达到该次数后放弃重试并上报，避免无意义的忙等。 */
 constexpr int kMaxRecoverFails = 3;
 /** 看护定时器周期（毫秒）：正常 / 异常 / 暂停三种状态取不同值，避免无谓唤醒。 */
-constexpr int kWatchdogNormalMs = 5000;
+constexpr int kWatchdogNormalMs = 1000;
 constexpr int kWatchdogFastMs = 2000;
 constexpr int kWatchdogIdleMs = 8000;
 
@@ -207,6 +207,9 @@ bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, QString* err
         }
         return false;
     }
+
+    // 图片与视频互斥：应用图片时立即停用视频，避免两者叠加导致状态混乱
+    stopVideo();
 
     // 填充方式写入注册表，随后必须再触发一次 SPI_SETDESKWALLPAPER 才会生效
     QSettings reg(QStringLiteral(R"(HKEY_CURRENT_USER\Control Panel\Desktop)"), QSettings::NativeFormat);
@@ -454,6 +457,14 @@ bool WallpaperEngine::applyVideo(const QString& path, int volume, QString* err)
     m_volume = volume;
     m_recoverFails = 0;
     m_lastTime = 0;
+
+    // 视频与图片互斥：视频生效后清空图片去重缓存，
+    // 确保下次切换回图片时不会误命中“与上次一致”而跳过。
+    m_lastImagePath.clear();
+    m_lastStyle.clear();
+    m_lastTile.clear();
+    m_lastImageOk = false;
+
     startWatchdog();
 
     if (m_usingFallback && err) {
@@ -634,9 +645,11 @@ void WallpaperEngine::onWatchdog()
         return;
     }
     if (current == PlaybackState::Ended) {
-        // 实测 input-repeat 在部分文件上不生效，播完就地重播，不重建窗口避免闪烁
+        // input-repeat 在部分文件/版本上循环有黑帧间隔；直接 seek 到 0
+        // 并恢复播放，不重建 media、不 stop，消除片尾到片头的卡顿。
         Logger::info(QStringLiteral("视频播放到结尾，自动重新循环"));
-        m_vlc.play(m_currentFile, reinterpret_cast<void*>(m_hostWnd), m_volume, true);
+        m_vlc.setTime(0);
+        m_vlc.setPaused(false);
         return;
     }
     if (current == PlaybackState::Error) {

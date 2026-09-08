@@ -152,6 +152,8 @@ private:
     QLabel* m_status = nullptr;
     QProgressBar* m_busy = nullptr;
     QPushButton* m_pauseButton = nullptr;
+    QPushButton* m_applyButton = nullptr; // 壁纸库页
+    QPushButton* m_nextButton = nullptr;  // 壁纸库页
 
     QTimer* m_timer = nullptr;
     QSystemTrayIcon* m_tray = nullptr;

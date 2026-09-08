@@ -328,17 +328,17 @@ QWidget* MainWindow::buildLibraryPage()
 
     // ---- 播放工具条 ----
     auto* actions = new QHBoxLayout();
-    auto* applyBtn = new QPushButton(QStringLiteral("应用选中"), pane);
-    applyBtn->setObjectName(QStringLiteral("primary"));
-    auto* nextBtn = new QPushButton(QStringLiteral("下一张"), pane);
+    m_applyButton = new QPushButton(QStringLiteral("应用选中"), pane);
+    m_applyButton->setObjectName(QStringLiteral("primary"));
+    m_nextButton = new QPushButton(QStringLiteral("下一张"), pane);
     m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), pane);
     auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), pane);
-    connect(applyBtn, &QPushButton::clicked, this, &MainWindow::onApplySelected);
-    connect(nextBtn, &QPushButton::clicked, this, &MainWindow::onNext);
+    connect(m_applyButton, &QPushButton::clicked, this, &MainWindow::onApplySelected);
+    connect(m_nextButton, &QPushButton::clicked, this, &MainWindow::onNext);
     connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onTogglePause);
     connect(stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
-    actions->addWidget(applyBtn);
-    actions->addWidget(nextBtn);
+    actions->addWidget(m_applyButton);
+    actions->addWidget(m_nextButton);
     actions->addWidget(m_pauseButton);
     actions->addWidget(stopBtn);
     actions->addStretch(1);
@@ -364,6 +364,15 @@ QWidget* MainWindow::buildLibraryPage()
     m_list->setContextMenuPolicy(Qt::NoContextMenu);
     m_list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     connect(m_list, &QListWidget::itemDoubleClicked, this, [this]() { onApplySelected(); });
+    connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
+        const bool hasSelection = (row >= 0 && row < m_items.size());
+        if (m_applyButton) {
+            m_applyButton->setEnabled(hasSelection);
+        }
+        if (m_nextButton) {
+            m_nextButton->setEnabled(!m_items.isEmpty());
+        }
+    });
     layout->addWidget(m_list, 1);
 
     // ---- 库管理条 ----
@@ -733,6 +742,16 @@ void MainWindow::refreshList()
         m_list->addItem(row);
     }
     requestThumbnails();
+
+    // 同步应用/下一张按钮可用状态
+    const int row = m_list->currentRow();
+    const bool hasSelection = (row >= 0 && row < m_items.size());
+    if (m_applyButton) {
+        m_applyButton->setEnabled(hasSelection);
+    }
+    if (m_nextButton) {
+        m_nextButton->setEnabled(!m_items.isEmpty());
+    }
 }
 
 void MainWindow::requestThumbnails()
@@ -1315,9 +1334,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
         return;
     }
     hide();
-    m_tray->showMessage(QStringLiteral("WallDesk"),
-                        QStringLiteral("已最小化到托盘，右键托盘图标可退出。"),
-                        QSystemTrayIcon::Information, 2000);
     event->ignore();
 }
 
