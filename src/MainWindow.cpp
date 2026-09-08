@@ -38,6 +38,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSize>
@@ -156,8 +157,8 @@ void MainWindow::setupTray()
 
 namespace {
 
-/** 画廊导航 / 设置页图标：程序内自绘，不依赖资源文件。 */
-QIcon drawNavIcon(const QColor& accent, bool gallery)
+/** 左侧导航图标：程序内自绘，不依赖资源文件。 */
+QIcon drawNavIcon(const QColor& accent, int kind)
 {
     QPixmap pm(48, 48);
     pm.fill(Qt::transparent);
@@ -165,14 +166,13 @@ QIcon drawNavIcon(const QColor& accent, bool gallery)
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setPen(Qt::NoPen);
     p.setBrush(accent);
-    if (gallery) {
+    if (kind == 0) { // 壁纸库
         p.drawRoundedRect(6, 8, 36, 32, 6, 6);
         p.setBrush(QColor(255, 255, 255, 220));
         p.drawRoundedRect(11, 13, 26, 15, 3, 3);
         p.setBrush(QColor(255, 255, 255, 180));
         p.drawRoundedRect(11, 31, 26, 4, 2, 2);
-    } else {
-        // 三根滑杆，示意“设置”
+    } else if (kind == 1) { // 设置
         for (int i = 0; i < 3; ++i) {
             const int y = 14 + i * 10;
             p.setBrush(accent);
@@ -180,6 +180,16 @@ QIcon drawNavIcon(const QColor& accent, bool gallery)
             p.setBrush(Qt::white);
             p.drawEllipse(16 + i * 8 - 4, y - 5, 9, 9);
         }
+    } else { // 工具：扳手
+        p.save();
+        p.translate(24, 24);
+        p.rotate(-45);
+        p.setBrush(accent);
+        p.drawRoundedRect(-4, -14, 8, 20, 3, 3);
+        p.drawRoundedRect(-8, 6, 16, 8, 2, 2);
+        p.setBrush(QColor(255, 255, 255, 200));
+        p.drawRoundedRect(-2, 4, 4, 12, 1, 1);
+        p.restore();
     }
     p.end();
     return QIcon(pm);
@@ -205,10 +215,12 @@ void MainWindow::buildUi()
     m_nav->setFixedWidth(128);
     m_nav->setIconSize(QSize(24, 24));
     const QColor accent(0x25, 0x63, 0xeb);
-    new QListWidgetItem(drawNavIcon(accent, true),
+    new QListWidgetItem(drawNavIcon(accent, 0),
                         QStringLiteral("壁纸库"), m_nav);
-    new QListWidgetItem(drawNavIcon(accent, false),
+    new QListWidgetItem(drawNavIcon(accent, 1),
                         QStringLiteral("设置"), m_nav);
+    new QListWidgetItem(drawNavIcon(accent, 2),
+                        QStringLiteral("工具"), m_nav);
     connect(m_nav, &QListWidget::currentRowChanged, this, [this](int row) {
         if (m_pages) {
             m_pages->setCurrentIndex(row);
@@ -220,11 +232,12 @@ void MainWindow::buildUi()
     m_pages = new QStackedWidget(central);
     m_pages->addWidget(buildLibraryPage());
     m_pages->addWidget(buildSettingsPage());
+    m_pages->addWidget(buildToolsPage());
     root->addWidget(m_pages, 1);
 
     setCentralWidget(central);
 
-    buildMenus();
+    buildActions();
 
     // ---- 状态栏：状态文字 + 后台任务指示 ----
     m_busy = new QProgressBar(this);
@@ -243,65 +256,67 @@ void MainWindow::buildUi()
     m_nav->setCurrentRow(0);
 }
 
-void MainWindow::buildMenus()
+void MainWindow::buildActions()
 {
-    QMenuBar* mb = menuBar();
+    // 顶部菜单栏已取消，所有菜单功能统一到左侧「工具」页。
+    // 这里只保留全局快捷键对应的 QAction，不显示菜单。
 
-    // ---- 文件 ----
-    QMenu* fileMenu = mb->addMenu(QStringLiteral("文件(&F)"));
-    fileMenu->addAction(QStringLiteral("添加图片(&I)…"), QKeySequence(QStringLiteral("Ctrl+Shift+I")),
-                        this, &MainWindow::onAddImages);
-    fileMenu->addAction(QStringLiteral("添加视频(&V)…"), QKeySequence(QStringLiteral("Ctrl+Shift+V")),
-                        this, &MainWindow::onAddVideos);
-    fileMenu->addSeparator();
-    fileMenu->addAction(QStringLiteral("打开数据目录"), this, [this] {
-        openFolder(AppPaths::dataDir());
-    });
-    fileMenu->addAction(QStringLiteral("打开日志目录"), this, [this] {
-        openFolder(Logger::logDir());
-    });
-    fileMenu->addSeparator();
-    fileMenu->addAction(QStringLiteral("退出(&X)"), QKeySequence(QStringLiteral("Ctrl+Q")),
-                        this, &MainWindow::onQuit);
+    auto* actAddImages = new QAction(QStringLiteral("添加图片"), this);
+    actAddImages->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+I")));
+    connect(actAddImages, &QAction::triggered, this, &MainWindow::onAddImages);
+    addAction(actAddImages);
 
-    // ---- 播放 ----
-    QMenu* playMenu = mb->addMenu(QStringLiteral("播放(&P)"));
-    playMenu->addAction(QStringLiteral("应用选中(&A)"), QKeySequence(QStringLiteral("Return")),
-                        this, &MainWindow::onApplySelected);
-    playMenu->addAction(QStringLiteral("下一张(&N)"), QKeySequence(QStringLiteral("Ctrl+N")),
-                        this, &MainWindow::onNext);
-    m_actPause = playMenu->addAction(QStringLiteral("暂停视频"), QKeySequence(QStringLiteral("Ctrl+P")),
-                                     this, &MainWindow::onTogglePause);
-    playMenu->addAction(QStringLiteral("停止壁纸(&S)"), this, &MainWindow::onStop);
-    playMenu->addSeparator();
-    playMenu->addAction(QStringLiteral("重新挂载桌面层(&R)"), QKeySequence(QStringLiteral("F5")),
-                        this, &MainWindow::onReattach);
+    auto* actAddVideos = new QAction(QStringLiteral("添加视频"), this);
+    actAddVideos->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+V")));
+    connect(actAddVideos, &QAction::triggered, this, &MainWindow::onAddVideos);
+    addAction(actAddVideos);
 
-    // ---- 视图 ----
-    QMenu* viewMenu = mb->addMenu(QStringLiteral("视图(&V)"));
-    QMenu* themeMenu = viewMenu->addMenu(QStringLiteral("主题(&T)"));
+    auto* actApply = new QAction(QStringLiteral("应用选中"), this);
+    actApply->setShortcut(QKeySequence(QStringLiteral("Return")));
+    connect(actApply, &QAction::triggered, this, &MainWindow::onApplySelected);
+    addAction(actApply);
+
+    auto* actNext = new QAction(QStringLiteral("下一张"), this);
+    actNext->setShortcut(QKeySequence(QStringLiteral("Ctrl+N")));
+    connect(actNext, &QAction::triggered, this, &MainWindow::onNext);
+    addAction(actNext);
+
+    m_actPause = new QAction(QStringLiteral("暂停视频"), this);
+    m_actPause->setShortcut(QKeySequence(QStringLiteral("Ctrl+P")));
+    connect(m_actPause, &QAction::triggered, this, &MainWindow::onTogglePause);
+    addAction(m_actPause);
+
+    auto* actReattach = new QAction(QStringLiteral("重新挂载桌面层"), this);
+    actReattach->setShortcut(QKeySequence(QStringLiteral("F5")));
+    connect(actReattach, &QAction::triggered, this, &MainWindow::onReattach);
+    addAction(actReattach);
+
+    // 页面切换快捷键
+    auto* actPage0 = new QAction(QStringLiteral("壁纸库"), this);
+    actPage0->setShortcut(QKeySequence(QStringLiteral("Ctrl+1")));
+    connect(actPage0, &QAction::triggered, this, [this] { m_nav->setCurrentRow(0); });
+    addAction(actPage0);
+
+    auto* actPage1 = new QAction(QStringLiteral("设置"), this);
+    actPage1->setShortcut(QKeySequence(QStringLiteral("Ctrl+2")));
+    connect(actPage1, &QAction::triggered, this, [this] { m_nav->setCurrentRow(1); });
+    addAction(actPage1);
+
+    auto* actPage2 = new QAction(QStringLiteral("工具"), this);
+    actPage2->setShortcut(QKeySequence(QStringLiteral("Ctrl+3")));
+    connect(actPage2, &QAction::triggered, this, [this] { m_nav->setCurrentRow(2); });
+    addAction(actPage2);
+
+    // 主题动作（与工具页中的按钮联动）
     const QStringList themeNames = {QStringLiteral("浅色"), QStringLiteral("深色"),
                                     QStringLiteral("跟随系统")};
     for (int i = 0; i < themeNames.size(); ++i) {
-        QAction* action = themeMenu->addAction(themeNames.at(i), this,
-                                               [this, i] { onThemeChanged(i); });
+        QAction* action = new QAction(themeNames.at(i), this);
         action->setCheckable(true);
+        connect(action, &QAction::triggered, this, [this, i] { onThemeChanged(i); });
         m_themeActions.append(action);
+        addAction(action);
     }
-
-    viewMenu->addSeparator();
-    viewMenu->addAction(QStringLiteral("壁纸库"), QKeySequence(QStringLiteral("Ctrl+1")), this, [this] {
-        m_nav->setCurrentRow(0);
-    });
-    viewMenu->addAction(QStringLiteral("设置"), QKeySequence(QStringLiteral("Ctrl+2")), this, [this] {
-        m_nav->setCurrentRow(1);
-    });
-
-    // ---- 帮助 ----
-    QMenu* helpMenu = mb->addMenu(QStringLiteral("帮助(&H)"));
-    helpMenu->addAction(QStringLiteral("清理缩略图缓存"), this, &MainWindow::onClearThumbCache);
-    helpMenu->addSeparator();
-    helpMenu->addAction(QStringLiteral("关于 WallDesk(&A)"), this, &MainWindow::onAbout);
 }
 
 QWidget* MainWindow::buildLibraryPage()
@@ -500,6 +515,91 @@ QWidget* MainWindow::buildSettingsPage()
     return scroll;
 }
 
+QWidget* MainWindow::buildToolsPage()
+{
+    auto* pane = new QWidget(this);
+    auto* layout = new QVBoxLayout(pane);
+    layout->setContentsMargins(16, 14, 16, 12);
+    layout->setSpacing(10);
+
+    // ---- 文件 ----
+    auto* fileBox = new QGroupBox(QStringLiteral("文件"), pane);
+    auto* fileLayout = new QHBoxLayout(fileBox);
+    auto* addImgBtn = new QPushButton(QStringLiteral("添加图片"), fileBox);
+    auto* addVidBtn = new QPushButton(QStringLiteral("添加视频"), fileBox);
+    auto* dataBtn = new QPushButton(QStringLiteral("打开数据目录"), fileBox);
+    auto* logBtn = new QPushButton(QStringLiteral("打开日志目录"), fileBox);
+    connect(addImgBtn, &QPushButton::clicked, this, &MainWindow::onAddImages);
+    connect(addVidBtn, &QPushButton::clicked, this, &MainWindow::onAddVideos);
+    connect(dataBtn, &QPushButton::clicked, this, [this] { openFolder(AppPaths::dataDir()); });
+    connect(logBtn, &QPushButton::clicked, this, [this] { openFolder(Logger::logDir()); });
+    fileLayout->addWidget(addImgBtn);
+    fileLayout->addWidget(addVidBtn);
+    fileLayout->addWidget(dataBtn);
+    fileLayout->addWidget(logBtn);
+    fileLayout->addStretch(1);
+    layout->addWidget(fileBox);
+
+    // ---- 播放 ----
+    auto* playBox = new QGroupBox(QStringLiteral("播放"), pane);
+    auto* playLayout = new QHBoxLayout(playBox);
+    auto* applyBtn = new QPushButton(QStringLiteral("应用选中"), playBox);
+    applyBtn->setObjectName(QStringLiteral("primary"));
+    auto* nextBtn = new QPushButton(QStringLiteral("下一张"), playBox);
+    auto* pauseBtn = new QPushButton(QStringLiteral("暂停 / 继续"), playBox);
+    auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), playBox);
+    auto* reattachBtn = new QPushButton(QStringLiteral("重新挂载"), playBox);
+    connect(applyBtn, &QPushButton::clicked, this, &MainWindow::onApplySelected);
+    connect(nextBtn, &QPushButton::clicked, this, &MainWindow::onNext);
+    connect(pauseBtn, &QPushButton::clicked, this, &MainWindow::onTogglePause);
+    connect(stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
+    connect(reattachBtn, &QPushButton::clicked, this, &MainWindow::onReattach);
+    playLayout->addWidget(applyBtn);
+    playLayout->addWidget(nextBtn);
+    playLayout->addWidget(pauseBtn);
+    playLayout->addWidget(stopBtn);
+    playLayout->addWidget(reattachBtn);
+    playLayout->addStretch(1);
+    layout->addWidget(playBox);
+
+    // ---- 视图 ----
+    auto* viewBox = new QGroupBox(QStringLiteral("视图"), pane);
+    auto* viewLayout = new QHBoxLayout(viewBox);
+    const QStringList themeNames = {QStringLiteral("浅色"), QStringLiteral("深色"),
+                                    QStringLiteral("跟随系统")};
+    for (int i = 0; i < themeNames.size(); ++i) {
+        auto* rb = new QRadioButton(themeNames.at(i), viewBox);
+        connect(rb, &QRadioButton::toggled, this, [this, i](bool checked) {
+            if (checked) {
+                onThemeChanged(i);
+            }
+        });
+        m_themeRadios.append(rb);
+        viewLayout->addWidget(rb);
+    }
+    viewLayout->addStretch(1);
+    layout->addWidget(viewBox);
+
+    // ---- 帮助 ----
+    auto* helpBox = new QGroupBox(QStringLiteral("帮助"), pane);
+    auto* helpLayout = new QHBoxLayout(helpBox);
+    auto* clearBtn = new QPushButton(QStringLiteral("清理缩略图缓存"), helpBox);
+    auto* aboutBtn = new QPushButton(QStringLiteral("关于 WallDesk"), helpBox);
+    auto* quitBtn = new QPushButton(QStringLiteral("退出程序"), helpBox);
+    quitBtn->setObjectName(QStringLiteral("danger"));
+    connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearThumbCache);
+    connect(aboutBtn, &QPushButton::clicked, this, &MainWindow::onAbout);
+    connect(quitBtn, &QPushButton::clicked, this, &MainWindow::onQuit);
+    helpLayout->addWidget(clearBtn);
+    helpLayout->addWidget(aboutBtn);
+    helpLayout->addWidget(quitBtn);
+    helpLayout->addStretch(1);
+    layout->addWidget(helpBox);
+
+    layout->addStretch(1);
+    return pane;
+}
+
 // ---------------------------------------------------------------- 配置
 
 void MainWindow::loadSettings()
@@ -527,6 +627,9 @@ void MainWindow::loadSettings()
     for (QAction* action : m_themeActions) {
         action->blockSignals(true);
     }
+    for (QRadioButton* rb : m_themeRadios) {
+        rb->blockSignals(true);
+    }
 
     m_fitCombo->setCurrentIndex(s.value(QStringLiteral("fit"), 0).toInt());
     m_screenCombo->setCurrentIndex(s.value(QStringLiteral("screen"), 1).toInt());
@@ -535,6 +638,9 @@ void MainWindow::loadSettings()
     const int themeIndex = s.value(QStringLiteral("theme"), 2).toInt();
     for (int i = 0; i < m_themeActions.size(); ++i) {
         m_themeActions.at(i)->setChecked(i == themeIndex);
+    }
+    for (int i = 0; i < m_themeRadios.size(); ++i) {
+        m_themeRadios.at(i)->setChecked(i == themeIndex);
     }
     m_volumeSlider->setValue(s.value(QStringLiteral("volume"), 0).toInt());
     m_intervalSpin->setValue(s.value(QStringLiteral("interval"), 30).toInt());
@@ -552,6 +658,9 @@ void MainWindow::loadSettings()
     m_profileCombo->blockSignals(false);
     for (QAction* action : m_themeActions) {
         action->blockSignals(false);
+    }
+    for (QRadioButton* rb : m_themeRadios) {
+        rb->blockSignals(false);
     }
 
     // 窗口几何与导航页：缩放自适应的记忆部分
@@ -1070,6 +1179,12 @@ void MainWindow::onLocateBackend()
 void MainWindow::onThemeChanged(int index)
 {
     m_theme = AppTheme::fromIndex(index);
+    for (int i = 0; i < m_themeActions.size(); ++i) {
+        m_themeActions.at(i)->setChecked(i == index);
+    }
+    for (int i = 0; i < m_themeRadios.size(); ++i) {
+        m_themeRadios.at(i)->setChecked(i == index);
+    }
     applyTheme();
     saveSettings();
 }

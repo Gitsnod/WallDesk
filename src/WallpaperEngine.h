@@ -46,8 +46,8 @@ struct MonitorInfo {
  * 壁纸引擎：负责图片壁纸与视频壁纸的实际生效。
  *
  * 图片：写注册表 + SystemParametersInfoW(SPI_SETDESKWALLPAPER)。
- * 视频：找到桌面 WorkerW 层，把宿主窗口挂到它下面（因此视频位于桌面图标之下，
- *       不会拦截鼠标点击），再用 libVLC 把画面渲染到该窗口。
+ * 视频：找到桌面 WorkerW 壁纸层（Win7~Win10 为顶层窗口，Win11 为 Progman 子窗口），
+ *       把宿主窗口挂到它下面，因此视频位于桌面图标之下，再用 libVLC 渲染画面。
  *
  * V2：降级挂载、看护自动重挂、续播、显示器枚举、状态查询。
  * V3 增强：

@@ -19,6 +19,7 @@ class QListWidget;
 class QMenu;
 class QProgressBar;
 class QPushButton;
+class QRadioButton;
 class QSlider;
 class QSpinBox;
 class QStackedWidget;
@@ -90,9 +91,11 @@ private slots:
 
 private:
     void buildUi();
-    void buildMenus();
+    /** 创建全局 QAction（快捷键）但不显示菜单栏；菜单功能已统一到左侧工具页。 */
+    void buildActions();
     QWidget* buildLibraryPage();
     QWidget* buildSettingsPage();
+    QWidget* buildToolsPage();
     /** 依据窗口宽度自适应画廊缩略图密度（V4.1 缩放自适应）。 */
     void adaptGalleryDensity();
     void setupWatcher();
@@ -134,6 +137,7 @@ private:
     QComboBox* m_monitorCombo = nullptr;
     QComboBox* m_profileCombo = nullptr;
     QList<QAction*> m_themeActions;
+    QList<QRadioButton*> m_themeRadios;
     QAction* m_actPause = nullptr;
     QSpinBox* m_intervalSpin = nullptr;
     QSlider* m_volumeSlider = nullptr;

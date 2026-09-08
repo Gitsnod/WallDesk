@@ -22,7 +22,40 @@ constexpr int kWatchdogNormalMs = 5000;
 constexpr int kWatchdogFastMs = 2000;
 constexpr int kWatchdogIdleMs = 8000;
 
-/** 策略一：向 Progman 发送 0x052C 后，在图标层之后取 WorkerW 兄弟窗口。 */
+/** 判断窗口是否覆盖整个主屏幕（允许少量误差）。 */
+bool coversScreen(HWND hwnd)
+{
+    RECT rc;
+    if (!GetWindowRect(hwnd, &rc)) {
+        return false;
+    }
+    const int sw = GetSystemMetrics(SM_CXSCREEN);
+    const int sh = GetSystemMetrics(SM_CYSCREEN);
+    return (rc.left <= 0 && rc.top <= 0
+            && (rc.right - rc.left) >= sw - 4
+            && (rc.bottom - rc.top) >= sh - 4);
+}
+
+/** 策略一（Win10/11 首选）：Progman 子窗口中的 WorkerW 壁纸层。
+ *  Win11 23H2+ 不再生成独立的可见顶层 WorkerW，但向 Progman 发 0x052C 后
+ *  会在 Progman 子窗口链里生成一个位于 SHELLDLL_DefView 之后的 WorkerW，
+ *  它才是真正的桌面壁纸层（视频挂到这里会位于图标之下）。 */
+HWND findWorkerWUnderProgman()
+{
+    HWND progman = FindWindowW(L"Progman", nullptr);
+    if (!progman) {
+        return nullptr;
+    }
+    HWND child = nullptr;
+    while ((child = FindWindowExW(progman, child, L"WorkerW", nullptr)) != nullptr) {
+        if (IsWindowVisible(child) && coversScreen(child)) {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
+/** 策略二（Win7/8/10 回退）：顶层窗口中，在 DefView 之后的 WorkerW 兄弟窗口。 */
 HWND findWorkerWAfterDefView()
 {
     HWND workerw = nullptr;
@@ -30,10 +63,9 @@ HWND findWorkerWAfterDefView()
         [](HWND hwnd, LPARAM lParam) -> BOOL {
             HWND defView = FindWindowExW(hwnd, nullptr, L"SHELLDLL_DefView", nullptr);
             if (defView) {
-                // 承载图标的那一层之后的下一个 WorkerW 兄弟窗口，即壁纸层
                 HWND* out = reinterpret_cast<HWND*>(lParam);
                 *out = FindWindowExW(nullptr, hwnd, L"WorkerW", nullptr);
-                return FALSE; // 已找到，停止枚举
+                return FALSE;
             }
             return TRUE;
         },
@@ -41,7 +73,7 @@ HWND findWorkerWAfterDefView()
     return workerw;
 }
 
-/** 策略二：直接枚举顶层窗口，找类名为 WorkerW 且可见、不含图标层的窗口。 */
+/** 策略三：直接枚举顶层窗口，找类名为 WorkerW 且可见、不含图标层的窗口。 */
 HWND findWorkerWByClass()
 {
     HWND found = nullptr;
@@ -54,11 +86,9 @@ HWND findWorkerWByClass()
             if (std::wstring(className) != L"WorkerW") {
                 return TRUE;
             }
-            // 隐藏的孤儿层挂上去视频会隐身，直接排除
             if (!IsWindowVisible(hwnd)) {
                 return TRUE;
             }
-            // 排除承载图标的那一层
             if (FindWindowExW(hwnd, nullptr, L"SHELLDLL_DefView", nullptr)) {
                 return TRUE;
             }
@@ -72,21 +102,25 @@ HWND findWorkerWByClass()
 /**
  * 桌面壁纸层定位。
  * 0x052C 是未公开的 Progman 消息，用于让资源管理器生成可分层的 WorkerW。
- * 注意：桌面上可能残留多个 WorkerW，其中老的是隐藏的孤儿层——挂上去视频
- * 会跟着隐身（实测复现），所以只接受可见的候选层；实在没有就回退 Progman。
+ * Win11 上 WorkerW 位于 Progman 子窗口链中、SHELLDLL_DefView 之后，因此
+ * 把视频宿主挂到该 WorkerW 上即可让视频位于桌面图标之下。
  */
 HWND findDesktopWorkerW()
 {
     HWND progman = FindWindowW(L"Progman", nullptr);
     if (progman) {
+        // 先尝试发送 0x052C，让它把壁纸层 WorkerW 创建/刷新出来
         for (int attempt = 0; attempt < 3; ++attempt) {
             DWORD_PTR unused = 0;
             SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 500, &unused);
-            if (HWND worker = findWorkerWAfterDefView()) {
-                if (IsWindowVisible(worker)) {
-                    return worker;
-                }
+            if (HWND worker = findWorkerWUnderProgman()) {
+                return worker;
             }
+        }
+    }
+    if (HWND worker = findWorkerWAfterDefView()) {
+        if (IsWindowVisible(worker)) {
+            return worker;
         }
     }
     return findWorkerWByClass();
@@ -242,9 +276,10 @@ HWND WallpaperEngine::resolveWorkerW()
 /**
  * 确定宿主窗口的父窗口。
  * 按可见性优先级依次尝试：
- *   1. 老式可见顶层 WorkerW（Win7~Win10 常见；视频位于图标之下）；
- *   2. Win11 新结构：无独立壁纸层，挂到 SHELLDLL_DefView（图标容器）下并
- *      置顶其 Z 序 —— 视频可见但会覆盖桌面图标，属于 Win11 的结构性取舍；
+ *   1. 桌面壁纸层 WorkerW：Win7~Win10 为顶层窗口，Win11 为 Progman 子窗口，
+ *      都位于 SHELLDLL_DefView（图标层）之后，视频自然在桌面图标之下；
+ *   2. 回退到 SHELLDLL_DefView（图标容器）下并置顶其 Z 序 —— 视频可见但会
+ *      覆盖桌面图标，仅在前一种情况不可用时使用；
  *   3. Progman 直接子窗口（部分环境仍可见）；
  *   4. 独立置底顶层窗口。
  */
