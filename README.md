@@ -8,9 +8,19 @@
 > 已发布：<https://github.com/Gitsnod/WallDesk> —— 安装程序与绿色版见
 > [Releases](https://github.com/Gitsnod/WallDesk/releases)。
 
-**当前版本：V4（发行版）**。在 V3（内嵌 VLC + 画廊界面 + 性能优化）基础上补齐
-「发给别人用」所需的一切：发布打包脚本、Inno Setup 安装程序、应用图标与版本资源、
-日志系统、单实例协作、便携模式。版本演进见 [九、版本变更](#九版本变更)。
+**当前版本：4.5.0（V4 发行版系列的第五次迭代）**。V4 补齐了「发给别人用」所需的一切：
+发布打包脚本、Inno Setup 安装程序、应用图标与版本资源、日志系统、单实例协作、便携模式；
+4.5 在此基础上重做了画廊（固定单元格 + 视频缩略图 + 自绘卡片）并大幅降低内存占用。
+版本演进见 [九、版本变更](#九版本变更)。
+
+**4.5 的三个重点**：
+
+1. **缩略图不再忽大忽小**：单元格尺寸改为设置项（小 / 中 / 大），窗口缩放只改变列数，
+   不再重算缩略图尺寸；同时补上视频缩略图（libVLC 抓帧，串行队列，失败降级占位图 + 播放角标）。
+2. **界面重绘**：画廊项由自定义委托绘制——圆角卡片、悬停/选中态、文件名与视频角标；
+   各页增加页头与空库引导。
+3. **内存优化**：列表项不再持有 `QPixmap`，缩略图走有上限的内存 LRU（180 张）；
+   只为可见区域发起解码请求（滚动防抖 120 ms）；视频抓帧串行化，避免多个 libvlc 实例同时驻留。
 
 ---
 
@@ -57,6 +67,10 @@ Qt 套件与编译器必须同为 64 位，否则链接报 `LNK1112`。
   - `WallDesk.exe --portable`：本次强制便携模式
   - `WallDesk.exe --verbose`：日志中记录调试信息
 - **单实例**：重复启动不会开第二个窗口，只会把已运行的窗口唤醒（或执行上面两条指令）
+- **缩略图尺寸**：设置 → 其它 → 缩略图尺寸（小 / 中 / 大）。窗口缩放只改变列数，
+  不再改变单元格尺寸（V4.5 起修掉了「拖窗口时缩略图忽大忽小」）
+- **视频缩略图**：默认开启，后台串行抓帧（同一时刻只有一个 libvlc 实例），
+  抓帧失败自动降级为占位图 + 播放角标；不想要可在「其它」里关掉
 - **便携模式**：界面「其它」分组里勾选，或在 exe 同目录放一个空的 `portable.ini`。
   启用后配置与数据全部保存在程序目录的 `data\` 下，不写注册表，整个文件夹拷 U 盘带走
 - **日志**：`数据目录\logs\WallDesk.log`，超过 2 MB 自动滚动。「关于」对话框可一键打开
@@ -69,7 +83,7 @@ Qt 套件与编译器必须同为 64 位，否则链接报 `LNK1112`。
 build.bat release
 ```
 
-产物：`dist\WallDesk-4.0.0-win64.zip`（约 25–60 MB，取决于是否内嵌 VLC）。
+产物：`dist\WallDesk-4.5.0-win64.zip`（约 25–60 MB，取决于是否内嵌 VLC）。
 用户解压即运行，无需安装 Qt / VLC / 运行时库。包内含：
 
 - `WallDesk.exe` + Qt 运行时 DLL（windeployqt 部署）
@@ -79,11 +93,11 @@ build.bat release
 
 ### 形态 2：安装程序（给非技术用户）
 
-1. 先执行形态 1 生成 `dist\WallDesk-4.0.0-win64\` 目录
+1. 先执行形态 1 生成 `dist\WallDesk-4.5.0-win64\` 目录
 2. 安装 [Inno Setup 6](https://jrsoftware.org/isdl.php)（免费，约 5 MB）
 3. 命令行执行 `iscc installer\WallDesk.iss`，或在 Inno 里打开该脚本按 F9
 
-产物：`dist\WallDesk-4.0.0-setup.exe`。安装到用户目录（无需管理员权限），
+产物：`dist\WallDesk-4.5.0-setup.exe`。安装到用户目录（无需管理员权限），
 提供桌面图标、开始菜单、可选开机自启、完整卸载。
 
 ### 形态 3：单文件 exe（内嵌 VLC 时）
@@ -109,7 +123,7 @@ cd WallpaperDesk
 git init                          # 初始化仓库（只需一次）
 git add .                         # 暂存全部文件（.gitignore 已排除构建产物）
 git status                        # 确认 src/VlcBundle.bin 等不在列表里
-git commit -m "WallDesk v4.0.0: 图片/视频壁纸，内嵌 VLC，便携模式"
+git commit -m "WallDesk v4.5.0: 图片/视频壁纸，内嵌 VLC，便携模式"
 
 # 在 GitHub 网页上新建空仓库（不要勾选初始化 README），然后：
 git branch -M main
@@ -121,21 +135,21 @@ git push -u origin main
 
 ```bash
 # 打标签
-git tag -a v4.0.0 -m "WallDesk 4.0.0"
-git push origin v4.0.0
+git tag -a v4.5.0 -m "WallDesk 4.5.0"
+git push origin v4.5.0
 ```
 
 然后到 GitHub 仓库页 → **Releases** → **Draft a new release**：
-- Tag 选 `v4.0.0`，标题 `WallDesk 4.0.0`
-- 上传 `dist\WallDesk-4.0.0-win64.zip` 和（可选）`WallDesk-4.0.0-setup.exe`
+- Tag 选 `v4.5.0`，标题 `WallDesk 4.5.0`
+- 上传 `dist\WallDesk-4.5.0-win64.zip` 和（可选）`WallDesk-4.5.0-setup.exe`
 - 描述里粘贴「更新内容」+ 校验值（从 SHA256SUMS.txt 取主程序那一行）
 - 点 **Publish release**
 
 有 GitHub CLI（`winget install GitHub.cli`）的话一条命令搞定：
 
 ```bash
-gh release create v4.0.0 dist\WallDesk-4.0.0-win64.zip dist\WallDesk-4.0.0-setup.exe ^
-  --title "WallDesk 4.0.0" --notes "见 README 九、版本变更"
+gh release create v4.5.0 dist\WallDesk-4.5.0-win64.zip dist\WallDesk-4.5.0-setup.exe ^
+  --title "WallDesk 4.5.0" --notes "见 README 九、版本变更"
 ```
 
 ### 5.3 日常更新
@@ -184,7 +198,10 @@ WallpaperDesk/
 │   ├── make_icon.py        生成应用图标（纯标准库）
 │   ├── pack_vlc.py         裁剪并打包 VLC 运行时为内嵌归档
 │   ├── make_release.py     发布打包（windeployqt + 校验 + zip）
-│   └── check_sources.py    静态自检（改源码后必跑）
+│   ├── check_sources.py    静态自检（改源码后必跑）
+│   ├── upload_release_assets.py  批量上传发布资产到 GitHub Release
+│   ├── verify_video.py     视频壁纸可见性验证（帧差法，无需人眼）
+│   └── test_loop.py / test_switch.py  长循环与图/视切换回归测试
 └── src/
     ├── main.cpp            入口：命令行、路径、日志、单实例
     ├── MainWindow.{h,cpp}  主界面、画廊、托盘、配置持久化
@@ -218,6 +235,12 @@ WallpaperDesk/
 
 | 版本 | 主要变更 |
 |------|----------|
+| **4.5.0** | 修复缩放窗口时缩略图忽大忽小（改为固定单元格 + 设置项 小/中/大）；新增视频缩略图（libVLC 抓帧，串行队列，失败降级占位图 + 播放角标）；画廊改自定义委托自绘（圆角卡片、悬停/选中态、文件名）；页头与空库引导；内存优化（列表项不再持有 QPixmap、内存 LRU 上限 180 张、仅可见区域加载、抓帧串行化） |
+| 4.4.0 | 顶部贯穿工具条（库管理与播放控制同排）、移除底部信息条；修复视频播放到片尾卡死（片尾前 1200 ms 预回卷 + Ended 用 stop/play 真回收）；修复「应用」时界面无响应（releaseMedia 移到后台线程，m_epoch 作废在途任务） |
+| 4.3.0 | 底部控制条、去重按钮、视频停滞检测自动重播、宿主窗口延迟显示、缩略图缓存清理与瘦身 |
+| 4.2.1 | 视频片尾无缝衔接（消除片尾卡顿）、图片/视频互斥、修复「应用选中 / 下一张」失效与卡顿、去掉最小化托盘气泡 |
+| 4.2.0 | 顶部菜单并入左侧导航栏；视频壁纸挂到桌面图标**下方**（WorkerW 图层） |
+| 4.1.0 | 界面重排与缩放自适应、修复 Win11 下视频壁纸不可见 |
 | V4 | 发布打包脚本（zip + SHA256 清单）、Inno Setup 安装程序、应用图标与版本资源、日志系统、单实例（--next/--quit）、便携模式、「关于」对话框；修复暂停按钮未创建（崩溃）、缺 `<future>` 头（编译失败） |
 | V3 | libVLC 内嵌进 exe（打包脚本 + 运行时解包）、画廊式界面与三套主题、全屏暂停、解码档位、异步缩略图 |
 | V2 | 系统事件监听（休眠/锁屏/电源/显示器）、自动重挂续播、降级挂载链、五级 libVLC 搜索、指定显示器 |

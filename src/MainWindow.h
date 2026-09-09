@@ -83,6 +83,7 @@ private slots:
     void onThemeChanged(int index);
     void onProfileChanged(int index);
     void onClearThumbCache();
+    void onThumbSizeChanged(int index);
     void onAbout();
     void onPortableToggled(bool enabled);
     void onVideoFailed(const QString& reason);
@@ -96,11 +97,15 @@ private:
     QWidget* buildLibraryPage();
     QWidget* buildSettingsPage();
     QWidget* buildToolsPage();
+    /** 壁纸库为空时的引导提示页。 */
+    QWidget* buildEmptyHint();
     /** 底部常驻播放控制条：所有页面共用，消除功能按钮重复。 */
     /** 顶部贯穿工具条：库管理与播放控制并排，所有页面共用一份。 */
     QWidget* buildMainToolbar();
-    /** 依据窗口宽度自适应画廊缩略图密度（V4.1 缩放自适应）。 */
-    void adaptGalleryDensity();
+    /** 按「缩略图尺寸」设置刷新单元格尺寸；窗口缩放不再改变它（V4.5）。 */
+    void updateGalleryMetrics();
+    /** 只为可见区域发起缩略图请求，滚动/缩放后延迟触发（V4.5 内存优化）。 */
+    void requestVisibleThumbnails();
     void setupWatcher();
     void setupTray();
     void loadSettings();
@@ -118,7 +123,6 @@ private:
     /** 准备视频后端：内置运行时优先，异步解包避免界面假死。 */
     void prepareBackend();
     void finishBackendLoad();
-    void requestThumbnails();
     void updateFullscreenGuard();
     void setAutoStart(bool enabled);
     bool isAutoStartEnabled() const;
@@ -139,6 +143,7 @@ private:
     QComboBox* m_screenCombo = nullptr;
     QComboBox* m_monitorCombo = nullptr;
     QComboBox* m_profileCombo = nullptr;
+    QComboBox* m_thumbSizeCombo = nullptr;
     QList<QAction*> m_themeActions;
     QList<QRadioButton*> m_themeRadios;
     QAction* m_actPause = nullptr;
@@ -153,12 +158,15 @@ private:
     QCheckBox* m_restoreLast = nullptr;
     QCheckBox* m_portable = nullptr;
     QLabel* m_status = nullptr;
+    QLabel* m_libraryTitle = nullptr;
+    QStackedWidget* m_galleryStack = nullptr;
     QProgressBar* m_busy = nullptr;
     QPushButton* m_pauseButton = nullptr;
     QPushButton* m_applyButton = nullptr; // 顶部贯穿工具条
     QPushButton* m_nextButton = nullptr;  // 顶部贯穿工具条
 
-    QTimer* m_timer = nullptr;
+    QTimer* m_timer = nullptr;        // 自动切换
+    QTimer* m_thumbTimer = nullptr;   // 可见区域缩略图补加载（防抖）
     QSystemTrayIcon* m_tray = nullptr;
     QMenu* m_trayMenu = nullptr;
     DesktopWatcher* m_watcher = nullptr;

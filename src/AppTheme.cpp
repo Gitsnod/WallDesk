@@ -137,9 +137,11 @@ QListWidget {
     padding: 6px;
     outline: none;
 }
-QListWidget::item { border-radius: 8px; padding: 2px; }
-QListWidget::item:hover { background: {hover}; }
-QListWidget::item:selected { background: {accentSoft}; color: {text}; }
+/* 画廊项由自定义委托绘制（圆角卡片 + 悬停/选中态），
+   这里一律透明，避免方形高亮从圆角卡片底下露出来。 */
+QListWidget::item { background: transparent; border: none; padding: 2px; }
+QListWidget::item:hover { background: transparent; }
+QListWidget::item:selected { background: transparent; color: {text}; }
 
 /* ---- 滑块 ---- */
 QSlider::groove:horizontal { height: 4px; background: {border}; border-radius: 2px; }
@@ -217,6 +219,12 @@ QFrame#toolbarSep {
     margin-left: 8px;
     margin-right: 8px;
 }
+
+/* ---- 页头 / 空状态（V4.5） ---- */
+QLabel#pageTitle { font-size: 16px; font-weight: 700; color: {text}; padding: 0 2px; }
+QWidget#emptyHint { background: transparent; }
+QLabel#emptyTitle { font-size: 15px; font-weight: 600; color: {text}; padding-top: 6px; }
+QLabel#emptySub { color: {subText}; }
 )";
 
 /** 把 {key} 占位符替换成实际色值。用花括号而非 %1，避免 QString::arg 的参数个数限制。 */

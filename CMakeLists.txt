@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(WallDesk VERSION 4.4.0 LANGUAGES CXX)
+project(WallDesk VERSION 4.5.0 LANGUAGES CXX)
 
 option(WALLDESK_DEPLOY_QT "构建后自动运行 windeployqt 部署 Qt 运行时" OFF)
 

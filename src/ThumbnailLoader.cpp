@@ -10,7 +10,7 @@
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPointer>
-#include <QPolygonF>
+#include <QRadialGradient>
 #include <QSet>
 #include "AppPaths.h"
 
@@ -25,8 +25,11 @@
 namespace {
 
 /** 缓存条目上限，超出后清理最旧的一半，防止长期占用磁盘。 */
-constexpr int kMaxCacheFiles = 600;
+constexpr int kMaxCacheFiles = 400;
 constexpr int kTrimCheckEvery = 50;
+
+/** 内存 LRU 上限（张数）。160x100 的 ARGB 图约 64 KB，180 张约 11 MB。 */
+constexpr int kMaxMemoryThumbs = 180;
 
 std::atomic<int> gSaveCounter{0};
 
@@ -133,9 +136,10 @@ public:
     void run() override
     {
         const QImage image = loadOrGenerate(m_path, m_isVideo, m_size, m_grabber);
-        if (image.isNull() || m_owner.isNull()) {
+        if (m_owner.isNull()) {
             return;
         }
+        // 失败也要回传一次：否则该路径会一直留在 pending 里，之后再也不会重试
         const QString path = m_path;
         QMetaObject::invokeMethod(m_owner.data(), [owner = m_owner, path, image]() {
             if (!owner.isNull()) {
@@ -156,16 +160,22 @@ private:
 
 ThumbnailLoader::ThumbnailLoader(QObject* parent)
     : QObject(parent)
+    , m_memory(kMaxMemoryThumbs)
 {
     // 独立线程池：限制并发为 2，避免与视频解码争抢 CPU / 磁盘
     m_pool = new QThreadPool(this);
     m_pool->setMaxThreadCount(2);
+    // 视频抓帧串行：每次抓帧都要新建一个 libvlc 实例，并行会让内存峰值翻倍
+    m_videoPool = new QThreadPool(this);
+    m_videoPool->setMaxThreadCount(1);
 }
 
 ThumbnailLoader::~ThumbnailLoader()
 {
     m_pool->clear();
     m_pool->waitForDone();
+    m_videoPool->clear();
+    m_videoPool->waitForDone();
 }
 
 void ThumbnailLoader::setVideoGrabber(std::function<QImage(const QString&, const QSize&)> grabber)
@@ -199,18 +209,51 @@ QImage ThumbnailLoader::cached(const QString& path, const QSize& size) const
     return image;
 }
 
+bool ThumbnailLoader::memoryPixmap(const QString& path, QPixmap* out) const
+{
+    if (path.isEmpty() || !out) {
+        return false;
+    }
+    if (QPixmap* hit = m_memory.object(path)) {
+        *out = *hit;
+        return true;
+    }
+    return false;
+}
+
 void ThumbnailLoader::request(const QString& path, bool isVideo, const QSize& size)
 {
     if (path.isEmpty() || m_pending.contains(path)) {
         return;
     }
+    // 已在内存里就没必要再排队
+    if (m_memory.contains(path)) {
+        return;
+    }
     m_pending.insert(path);
-    m_pool->start(new ThumbTask(path, isVideo, size, QPointer<ThumbnailLoader>(this), m_grabber));
+    auto* task = new ThumbTask(path, isVideo, size, QPointer<ThumbnailLoader>(this), m_grabber);
+    (isVideo ? m_videoPool : m_pool)->start(task);
+}
+
+void ThumbnailLoader::clearPending()
+{
+    m_pending.clear();
+    m_pool->clear();
+    m_videoPool->clear();
+}
+
+void ThumbnailLoader::clearMemory()
+{
+    m_memory.clear();
 }
 
 void ThumbnailLoader::deliver(const QString& path, const QImage& image)
 {
     m_pending.remove(path);
+    if (image.isNull()) {
+        return; // 生成失败：交回给调用方继续画占位图
+    }
+    m_memory.insert(path, new QPixmap(QPixmap::fromImage(image)), 1);
     emit ready(path, image);
 }
 
@@ -230,27 +273,13 @@ QImage ThumbnailLoader::placeholder(const QSize& size, bool video)
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(image.rect(), gradient);
 
+    // 只画一层很淡的中心光斑，具体角标（播放三角）由列表委托统一叠加，
+    // 这样真实缩略图与占位图的角标位置完全一致，不会出现「有没有角标」的跳变。
     const int side = qMin(size.width(), size.height());
-    if (video) {
-        // 影片角标：圆环 + 三角
-        painter.setPen(QPen(QColor(255, 255, 255, 210), qMax(2, side / 32)));
-        painter.setBrush(Qt::NoBrush);
-        const int r = side / 5;
-        painter.drawEllipse(QPoint(size.width() / 2, size.height() / 2), r, r);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(255, 255, 255, 230));
-        QPolygonF triangle;
-        const qreal cx = size.width() / 2.0 - r * 0.18;
-        const qreal cy = size.height() / 2.0;
-        triangle << QPointF(cx - r * 0.22, cy - r * 0.36) << QPointF(cx - r * 0.22, cy + r * 0.36)
-                 << QPointF(cx + r * 0.42, cy);
-        painter.drawPolygon(triangle);
-    } else {
-        painter.setPen(QPen(QColor(255, 255, 255, 170), qMax(2, side / 32)));
-        painter.setBrush(Qt::NoBrush);
-        const int m = side / 6;
-        painter.drawRoundedRect(QRect(m, m, size.width() - 2 * m, size.height() - 2 * m), 6, 6);
-    }
+    QRadialGradient glow(QPointF(size.width() / 2.0, size.height() / 2.0), side * 0.7);
+    glow.setColorAt(0.0, video ? QColor(0x60, 0xA5, 0xFA, 40) : QColor(0xFF, 0xFF, 0xFF, 40));
+    glow.setColorAt(1.0, QColor(0, 0, 0, 0));
+    painter.fillRect(image.rect(), glow);
     painter.end();
     return image;
 }

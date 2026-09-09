@@ -26,6 +26,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QGroupBox>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -35,11 +36,14 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
+#include <QPolygonF>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSize>
 #include <QSlider>
@@ -47,6 +51,7 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyle>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -59,10 +64,177 @@ constexpr int kRoleType = Qt::UserRole + 1;
 constexpr int kRolePath = Qt::UserRole + 2;
 /** 电源状态：0=电池，1=交流，255=未知。 */
 constexpr BYTE kAcLineOnAc = 1;
-/** 画廊缩略图尺寸与网格间距。 */
-const QSize kThumbSize(160, 100);
-const QSize kGridSize(176, 132);
+
+/**
+ * 画廊缩略图基准宽度：小 / 中 / 大。
+ * 关键点：窗口缩放只改变列数，不再改变单元格尺寸——
+ * 之前每次 resize 都重算 iconSize，拖窗口时缩略图会跟着忽大忽小（V4.5 修复）。
+ */
+constexpr int kThumbWidths[] = {128, 160, 208};
+constexpr int kThumbDefaultIndex = 1;
+
+QSize thumbSizeForIndex(int index)
+{
+    const int i = qBound(0, index, 2);
+    const int w = kThumbWidths[i];
+    return QSize(w, w * 5 / 8);
 }
+
+/** 网格单元 = 缩略图 + 上下留白 + 一行文件名。 */
+QSize gridSizeForThumb(const QSize& thumb)
+{
+    return QSize(thumb.width() + 16, thumb.height() + 42);
+}
+
+/** 两色混合，用于卡片底色（选中 / 悬停）与细描边。 */
+QColor blend(const QColor& a, const QColor& b, qreal t)
+{
+    return QColor(static_cast<int>(a.red() + (b.red() - a.red()) * t),
+                  static_cast<int>(a.green() + (b.green() - a.green()) * t),
+                  static_cast<int>(a.blue() + (b.blue() - a.blue()) * t),
+                  static_cast<int>(a.alpha() + (b.alpha() - a.alpha()) * t));
+}
+
+/** 占位图缓存：按尺寸 + 类型缓存，避免每次重绘都重画一遍渐变。 */
+QPixmap placeholderPixmap(const QSize& size, bool video)
+{
+    static QHash<QString, QPixmap> cache;
+    const QString key = QStringLiteral("%1x%2-%3")
+                            .arg(size.width()).arg(size.height()).arg(video ? 1 : 0);
+    const auto it = cache.constFind(key);
+    if (it != cache.constEnd()) {
+        return it.value();
+    }
+    const QPixmap pm = QPixmap::fromImage(ThumbnailLoader::placeholder(size, video));
+    cache.insert(key, pm);
+    return pm;
+}
+
+/**
+ * 画廊项自绘：圆角缩略图 + 文件名 + 视频播放角标。
+ *
+ * 内存要点：缩略图只从内存 LRU 取，取不到就画占位图并发起异步请求，
+ * QListWidgetItem 本身不再持有 QPixmap，几百项的库也不会把内存吃满（V4.5）。
+ */
+class GalleryDelegate : public QStyledItemDelegate {
+public:
+    GalleryDelegate(QListWidget* view, ThumbnailLoader* thumbs, QObject* parent = nullptr)
+        : QStyledItemDelegate(parent)
+        , m_view(view)
+        , m_thumbs(thumbs)
+    {
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override
+    {
+        if (!index.isValid()) {
+            return;
+        }
+        const bool video = index.data(kRoleType).toInt() == 1;
+        const QString path = index.data(kRolePath).toString();
+        const QString name = index.data(Qt::DisplayRole).toString();
+        const bool selected = option.state & QStyle::State_Selected;
+        const bool hovered = option.state & QStyle::State_MouseOver;
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter->setClipRect(option.rect);
+
+        const QRect card = option.rect.adjusted(3, 3, -3, -3);
+        const QColor base = option.palette.color(QPalette::Base);
+        const QColor accent = option.palette.color(QPalette::Highlight);
+        QColor bg = base;
+        if (selected) {
+            bg = blend(base, accent, 0.22);
+        } else if (hovered) {
+            bg = blend(base, accent, 0.08);
+        }
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(bg);
+        painter->drawRoundedRect(card, 10, 10);
+
+        // ---- 缩略图 ----
+        const QSize icon = m_view ? m_view->iconSize() : QSize(160, 100);
+        const QRect thumb(QPoint(card.center().x() - icon.width() / 2, card.top() + 6), icon);
+
+        QPixmap pm;
+        if (m_thumbs && m_thumbs->memoryPixmap(path, &pm)) {
+            if (pm.size() != thumb.size()) {
+                const QPixmap scaled = pm.scaled(thumb.size(), Qt::KeepAspectRatioByExpanding,
+                                                 Qt::SmoothTransformation);
+                pm = scaled.copy((scaled.width() - thumb.width()) / 2,
+                                 (scaled.height() - thumb.height()) / 2,
+                                 thumb.width(), thumb.height());
+            }
+        } else {
+            pm = placeholderPixmap(icon, video);
+            if (m_thumbs && !path.isEmpty() && m_view) {
+                m_thumbs->request(path, video, icon);
+            }
+        }
+
+        QPainterPath clip;
+        clip.addRoundedRect(thumb, 8, 8);
+        painter->save();
+        painter->setClipPath(clip);
+        painter->drawPixmap(thumb, pm);
+        painter->restore();
+
+        // 内描边：浅色主题下防止浅色图与卡片糊在一起
+        painter->setPen(QPen(blend(base, option.palette.color(QPalette::Text), 0.12), 1));
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRoundedRect(thumb.adjusted(0, 0, -1, -1), 8, 8);
+
+        if (video) {
+            drawPlayBadge(painter, thumb);
+        }
+
+        // ---- 文件名 ----
+        const QRect text(card.left() + 6, thumb.bottom() + 5, card.width() - 12,
+                         card.bottom() - thumb.bottom() - 5);
+        painter->setPen(option.palette.color(QPalette::Text));
+        painter->drawText(text, Qt::AlignHCenter | Qt::AlignVCenter,
+                          painter->fontMetrics().elidedText(name, Qt::ElideMiddle, text.width()));
+
+        if (selected) {
+            painter->setPen(QPen(accent, 2));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRoundedRect(card.adjusted(1, 1, -1, -1), 10, 10);
+        }
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override
+    {
+        return m_view ? m_view->gridSize() : QSize(176, 132);
+    }
+
+private:
+    static void drawPlayBadge(QPainter* painter, const QRect& thumb)
+    {
+        const int d = qMax(20, qMin(thumb.width(), thumb.height()) * 34 / 100);
+        QRectF badge(0.0, 0.0, static_cast<qreal>(d), static_cast<qreal>(d));
+        badge.moveCenter(QPointF(thumb.center()));
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QColor(0, 0, 0, 130));
+        painter->drawEllipse(badge);
+
+        QPolygonF tri;
+        const qreal cx = badge.center().x() + d * 0.04;
+        const qreal cy = badge.center().y();
+        tri << QPointF(cx - d * 0.10, cy - d * 0.20) << QPointF(cx - d * 0.10, cy + d * 0.20)
+            << QPointF(cx + d * 0.20, cy);
+        painter->setBrush(QColor(255, 255, 255, 235));
+        painter->drawPolygon(tri);
+    }
+
+    QListWidget* m_view = nullptr;
+    ThumbnailLoader* m_thumbs = nullptr;
+};
+
+} // namespace
 
 QIcon MainWindow::appIcon()
 {
@@ -212,7 +384,7 @@ void MainWindow::buildUi()
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    // ---- 左侧导航栏（分级入口：库 / 设置）----
+    // ---- 左侧导航栏（分级入口：库 / 设置 / 工具）----
     m_nav = new QListWidget(central);
     m_nav->setObjectName(QStringLiteral("navRail"));
     m_nav->setViewMode(QListView::ListMode);
@@ -220,8 +392,7 @@ void MainWindow::buildUi()
     m_nav->setWrapping(false);
     m_nav->setSelectionMode(QAbstractItemView::SingleSelection);
     m_nav->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_nav->setFixedWidth(128);
-    m_nav->setIconSize(QSize(24, 24));
+    m_nav->setIconSize(QSize(22, 22));
     const QColor accent(0x25, 0x63, 0xeb);
     new QListWidgetItem(drawNavIcon(accent, 0),
                         QStringLiteral("壁纸库"), m_nav);
@@ -234,6 +405,7 @@ void MainWindow::buildUi()
             m_pages->setCurrentIndex(row);
         }
     });
+    m_nav->setFixedWidth(148);
     root->addWidget(m_nav);
 
     // ---- 右侧页面栈 ----
@@ -328,6 +500,36 @@ void MainWindow::buildActions()
     }
 }
 
+QWidget* MainWindow::buildEmptyHint()
+{
+    auto* hint = new QWidget(this);
+    hint->setObjectName(QStringLiteral("emptyHint"));
+    auto* layout = new QVBoxLayout(hint);
+    layout->setSpacing(6);
+    layout->addStretch(1);
+
+    auto* icon = new QLabel(hint);
+    icon->setPixmap(appIcon().pixmap(56, 56));
+    icon->setAlignment(Qt::AlignHCenter);
+
+    auto* title = new QLabel(QStringLiteral("壁纸库还是空的"), hint);
+    title->setObjectName(QStringLiteral("emptyTitle"));
+    title->setAlignment(Qt::AlignHCenter);
+
+    auto* sub = new QLabel(QStringLiteral("用上方「添加图片 / 添加视频」把文件加进来，\n"
+                                          "双击任意一张即可应用到桌面。"),
+                           hint);
+    sub->setObjectName(QStringLiteral("emptySub"));
+    sub->setAlignment(Qt::AlignHCenter);
+    sub->setWordWrap(true);
+
+    layout->addWidget(icon);
+    layout->addWidget(title);
+    layout->addWidget(sub);
+    layout->addStretch(1);
+    return hint;
+}
+
 QWidget* MainWindow::buildLibraryPage()
 {
     auto* pane = new QWidget(this);
@@ -337,17 +539,30 @@ QWidget* MainWindow::buildLibraryPage()
 
     // 添加 / 移除 / 清空与播放控制都在顶部贯穿工具条，本页只留画廊
 
-    // ---- 画廊 ----
-    m_list = new QListWidget(pane);
+    // ---- 页头 ----
+    m_libraryTitle = new QLabel(QStringLiteral("壁纸库"), pane);
+    m_libraryTitle->setObjectName(QStringLiteral("pageTitle"));
+    layout->addWidget(m_libraryTitle);
+
+    // ---- 画廊（与空状态提示叠放，库为空时给一句人话而不是一片空白）----
+    m_galleryStack = new QStackedWidget(pane);
+    m_galleryStack->setObjectName(QStringLiteral("galleryStack"));
+
+    m_list = new QListWidget(m_galleryStack);
     m_list->setViewMode(QListWidget::IconMode);
     m_list->setMovement(QListWidget::Static);
     m_list->setResizeMode(QListWidget::Adjust);
     m_list->setWrapping(true);
     m_list->setUniformItemSizes(true);
+    m_list->setSpacing(2);
     m_list->setTextElideMode(Qt::ElideMiddle);
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
     m_list->setContextMenuPolicy(Qt::NoContextMenu);
     m_list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_list->setIconSize(thumbSizeForIndex(kThumbDefaultIndex));
+    m_list->setGridSize(gridSizeForThumb(thumbSizeForIndex(kThumbDefaultIndex)));
+    m_list->setItemDelegate(new GalleryDelegate(m_list, m_thumbs, m_list));
+    m_list->setAttribute(Qt::WA_MacShowFocusRect, false);
     connect(m_list, &QListWidget::itemDoubleClicked, this, [this]() { onApplySelected(); });
     connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
         const bool hasSelection = (row >= 0 && row < m_items.size());
@@ -358,7 +573,22 @@ QWidget* MainWindow::buildLibraryPage()
             m_nextButton->setEnabled(!m_items.isEmpty());
         }
     });
-    layout->addWidget(m_list, 1);
+
+    m_galleryStack->addWidget(m_list);
+    m_galleryStack->addWidget(buildEmptyHint());
+    layout->addWidget(m_galleryStack, 1);
+
+    // 只加载看得见的那几张：滚动 / 缩放后延迟 120 ms 补请求，
+    // 一次性给整个库排队会同时唤醒一堆解码线程，内存和 CPU 都白烧。
+    m_thumbTimer = new QTimer(this);
+    m_thumbTimer->setSingleShot(true);
+    m_thumbTimer->setInterval(120);
+    connect(m_thumbTimer, &QTimer::timeout, this, &MainWindow::requestVisibleThumbnails);
+    connect(m_list->verticalScrollBar(), &QScrollBar::valueChanged, this, [this]() {
+        if (m_thumbTimer) {
+            m_thumbTimer->start();
+        }
+    });
 
     return pane;
 }
@@ -374,6 +604,10 @@ QWidget* MainWindow::buildSettingsPage()
     auto* layout = new QVBoxLayout(pane);
     layout->setContentsMargins(16, 14, 16, 12);
     layout->setSpacing(10);
+
+    auto* title = new QLabel(QStringLiteral("设置"), pane);
+    title->setObjectName(QStringLiteral("pageTitle"));
+    layout->addWidget(title);
 
     // ---- 图片 ----
     auto* imageBox = new QGroupBox(QStringLiteral("图片"), pane);
@@ -467,7 +701,26 @@ QWidget* MainWindow::buildSettingsPage()
     auto* miscForm = new QFormLayout(miscBox);
     m_videoThumbnails = new QCheckBox(QStringLiteral("生成视频缩略图"), miscBox);
     m_videoThumbnails->setToolTip(QStringLiteral("关闭后视频项使用占位图，可避免大文件解码开销。"));
+    connect(m_videoThumbnails, &QCheckBox::toggled, this, [this](bool on) {
+        if (on) {
+            requestVisibleThumbnails(); // 刚打开：立刻把可见的视频补抓一帧
+        } else {
+            m_list->viewport()->update();
+        }
+        saveSettings();
+    });
     miscForm->addRow(QString(), m_videoThumbnails);
+
+    m_thumbSizeCombo = new QComboBox(miscBox);
+    m_thumbSizeCombo->addItem(QStringLiteral("小（128 px）"), 0);
+    m_thumbSizeCombo->addItem(QStringLiteral("中（160 px）"), 1);
+    m_thumbSizeCombo->addItem(QStringLiteral("大（208 px）"), 2);
+    m_thumbSizeCombo->setCurrentIndex(kThumbDefaultIndex);
+    m_thumbSizeCombo->setToolTip(QStringLiteral(
+        "只影响列表显示尺寸。窗口缩放不再自动改变缩略图大小——之前那样拖窗口会让缩略图忽大忽小。"));
+    connect(m_thumbSizeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onThumbSizeChanged);
+    miscForm->addRow(QStringLiteral("缩略图尺寸"), m_thumbSizeCombo);
 
     m_portable = new QCheckBox(QStringLiteral("便携模式（重启后生效）"), miscBox);
     m_portable->setChecked(AppPaths::portable());
@@ -501,6 +754,10 @@ QWidget* MainWindow::buildToolsPage()
     auto* layout = new QVBoxLayout(pane);
     layout->setContentsMargins(16, 14, 16, 12);
     layout->setSpacing(10);
+
+    auto* title = new QLabel(QStringLiteral("工具"), pane);
+    title->setObjectName(QStringLiteral("pageTitle"));
+    layout->addWidget(title);
 
     // ---- 文件 ----（添加图片 / 添加视频 / 播放控制都在顶部贯穿工具条，此处不重复）
     auto* fileBox = new QGroupBox(QStringLiteral("文件"), pane);
@@ -642,6 +899,7 @@ void MainWindow::loadSettings()
     m_screenCombo->blockSignals(true);
     m_monitorCombo->blockSignals(true);
     m_profileCombo->blockSignals(true);
+    m_thumbSizeCombo->blockSignals(true);
     for (QAction* action : m_themeActions) {
         action->blockSignals(true);
     }
@@ -653,6 +911,8 @@ void MainWindow::loadSettings()
     m_screenCombo->setCurrentIndex(s.value(QStringLiteral("screen"), 1).toInt());
     m_monitorCombo->setCurrentIndex(s.value(QStringLiteral("monitor"), 0).toInt());
     m_profileCombo->setCurrentIndex(s.value(QStringLiteral("profile"), 0).toInt());
+    m_thumbSizeCombo->setCurrentIndex(
+        qBound(0, s.value(QStringLiteral("thumbSize"), kThumbDefaultIndex).toInt(), 2));
     const int themeIndex = s.value(QStringLiteral("theme"), 2).toInt();
     for (int i = 0; i < m_themeActions.size(); ++i) {
         m_themeActions.at(i)->setChecked(i == themeIndex);
@@ -674,6 +934,7 @@ void MainWindow::loadSettings()
     m_screenCombo->blockSignals(false);
     m_monitorCombo->blockSignals(false);
     m_profileCombo->blockSignals(false);
+    m_thumbSizeCombo->blockSignals(false);
     for (QAction* action : m_themeActions) {
         action->blockSignals(false);
     }
@@ -687,7 +948,7 @@ void MainWindow::loadSettings()
         restoreGeometry(geo);
     }
     m_nav->setCurrentRow(s.value(QStringLiteral("winPage"), 0).toInt());
-    adaptGalleryDensity();
+    updateGalleryMetrics();
 
     m_theme = AppTheme::fromIndex(themeIndex);
     m_engine.setPerformanceProfile(
@@ -713,6 +974,7 @@ void MainWindow::saveSettings()
     s.setValue(QStringLiteral("screen"), m_screenCombo->currentIndex());
     s.setValue(QStringLiteral("monitor"), m_monitorCombo->currentIndex());
     s.setValue(QStringLiteral("profile"), m_profileCombo->currentIndex());
+    s.setValue(QStringLiteral("thumbSize"), m_thumbSizeCombo->currentIndex());
     for (int i = 0; i < m_themeActions.size(); ++i) {
         if (m_themeActions.at(i)->isChecked()) {
             s.setValue(QStringLiteral("theme"), i);
@@ -735,22 +997,31 @@ void MainWindow::saveSettings()
 
 void MainWindow::refreshList()
 {
+    // 旧任务先作废：库整体重建后，为已移除项排队解码纯属浪费
+    if (m_thumbs) {
+        m_thumbs->clearPending();
+    }
     m_list->clear();
     for (const MediaItem& item : m_items) {
         const bool video = (item.type == MediaItem::Type::Video);
-        QImage thumb = m_thumbs->cached(item.path, kThumbSize);
-        if (thumb.isNull()) {
-            thumb = ThumbnailLoader::placeholder(kThumbSize, video);
-        }
-
-        auto* row = new QListWidgetItem(QPixmap::fromImage(thumb), QFileInfo(item.path).fileName());
+        // 不再给每项塞 QPixmap：缩略图由委托按需从内存 LRU 取，内存占用与库大小解耦
+        auto* row = new QListWidgetItem(QFileInfo(item.path).fileName());
         row->setData(kRoleType, video ? 1 : 0);
         row->setData(kRolePath, item.path);
         row->setToolTip(item.path);
         row->setTextAlignment(Qt::AlignHCenter | Qt::AlignBottom);
         m_list->addItem(row);
     }
-    requestThumbnails();
+
+    if (m_libraryTitle) {
+        m_libraryTitle->setText(m_items.isEmpty()
+                                    ? QStringLiteral("壁纸库")
+                                    : QStringLiteral("壁纸库 · %1 项").arg(m_items.size()));
+    }
+    if (m_galleryStack) {
+        m_galleryStack->setCurrentIndex(m_items.isEmpty() ? 1 : 0);
+    }
+    requestVisibleThumbnails();
 
     // 同步应用/下一张按钮可用状态
     const int row = m_list->currentRow();
@@ -763,25 +1034,51 @@ void MainWindow::refreshList()
     }
 }
 
-void MainWindow::requestThumbnails()
+/**
+ * 只为可见区域（上下各留一屏缓冲）发起缩略图请求。
+ * 大库（几百项）下这一条把内存峰值从「全库解码」降到「一屏解码」。
+ */
+void MainWindow::requestVisibleThumbnails()
 {
-    for (const MediaItem& item : m_items) {
-        const bool video = (item.type == MediaItem::Type::Video);
+    if (!m_list || !m_thumbs || m_items.isEmpty()) {
+        return;
+    }
+    const QRect visible = m_list->viewport()->rect().adjusted(0, -160, 0, 160);
+    for (int i = 0; i < m_list->count(); ++i) {
+        QListWidgetItem* row = m_list->item(i);
+        if (!row) {
+            continue;
+        }
+        const QRect rect = m_list->visualItemRect(row);
+        if (!rect.isValid() || !rect.intersects(visible)) {
+            continue;
+        }
+        const bool video = row->data(kRoleType).toInt() == 1;
         if (video && !m_videoThumbnails->isChecked()) {
             continue; // 关掉开关就不去解码视频，省一次 IO
         }
-        m_thumbs->request(item.path, video, kThumbSize);
+        m_thumbs->request(row->data(kRolePath).toString(), video, m_list->iconSize());
     }
 }
 
-void MainWindow::onThumbnailReady(const QString& path, const QImage& image)
+void MainWindow::onThumbSizeChanged(int)
 {
-    for (int i = 0; i < m_list->count(); ++i) {
-        QListWidgetItem* row = m_list->item(i);
-        if (row && row->data(kRolePath).toString() == path) {
-            row->setIcon(QPixmap::fromImage(image));
-            break;
-        }
+    updateGalleryMetrics();
+    if (m_thumbs) {
+        m_thumbs->clearMemory(); // 旧尺寸的解码结果全部作废
+    }
+    if (m_list) {
+        m_list->viewport()->update();
+    }
+    requestVisibleThumbnails();
+    saveSettings();
+}
+
+void MainWindow::onThumbnailReady(const QString&, const QImage&)
+{
+    // 缩略图已进入内存 LRU，委托下次绘制时自取；这里只要求重绘可见区域
+    if (m_list) {
+        m_list->viewport()->update();
     }
 }
 
@@ -822,29 +1119,25 @@ void MainWindow::applyTheme()
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
-    adaptGalleryDensity();
+    // 只补加载新露出来的项，尺寸本身不随窗口变化（V4.5：修复缩放时缩略图忽大忽小）
+    if (m_thumbTimer) {
+        m_thumbTimer->start();
+    }
 }
 
-void MainWindow::adaptGalleryDensity()
+void MainWindow::updateGalleryMetrics()
 {
     if (!m_list) {
         return;
     }
-    // 自适应密度：可用宽度决定列数，缩略图尺寸在 120~200 逻辑像素间滑动
-    const int available = m_list->viewport()->width() - 24;
-    if (available < 160) {
-        return;
-    }
-    int cols = qBound(3, available / 200, 8);
-    while (cols > 3 && available / cols < 130) {
-        --cols;
-    }
-    const int cell = qBound(120, available / cols - 14, 200);
-    const QSize thumb(cell, cell * 5 / 8);
-    const QSize grid(cell + 14, cell * 5 / 8 + 28);
+    const int index = m_thumbSizeCombo ? m_thumbSizeCombo->currentIndex() : kThumbDefaultIndex;
+    const QSize thumb = thumbSizeForIndex(index);
+    const QSize grid = gridSizeForThumb(thumb);
     if (m_list->iconSize() != thumb) {
         m_list->setIconSize(thumb);
         m_list->setGridSize(grid);
+        m_list->updateGeometry();
+        m_list->viewport()->update();
     }
 }
 
@@ -987,7 +1280,7 @@ void MainWindow::finishBackendLoad()
     });
 
     maybeRestoreLast();
-    requestThumbnails();
+    requestVisibleThumbnails();
 
     // 顺手清掉旧版本遗留的解包目录，失败也无副作用。
     // 用 detached 线程而非 std::async：后者返回的 future 析构时会阻塞等待任务完成。
@@ -1227,6 +1520,7 @@ void MainWindow::onProfileChanged(int)
 
 void MainWindow::onClearThumbCache()
 {
+    m_thumbs->clearMemory(); // 先释放已解码的，再清磁盘
     const int removed = ThumbnailLoader::clearCache();
     updateStatus(QStringLiteral("已清理 %1 个缩略图缓存文件，浏览时会重新生成。").arg(removed));
     refreshList();
