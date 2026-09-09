@@ -14,7 +14,7 @@ if not TOKEN:
 
 REPO = 'Gitsnod/WallDesk'
 DIST = os.path.join(os.path.dirname(__file__), '..', 'dist')
-VERSIONS = ['4.1.0', '4.2.0', '4.2.1', '4.3.0', '4.4.0']
+VERSIONS = ['4.5.0', '4.1.0', '4.2.0', '4.2.1', '4.3.0', '4.4.0']
 
 def api_req(url, method='GET', data=None, headers=None):
     h = {'Authorization': f'Bearer {TOKEN}', 'Accept': 'application/vnd.github+json'}
