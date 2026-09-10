@@ -604,6 +604,57 @@ QWidget* MainWindow::buildLibraryPage()
     filterLayout->addWidget(m_sortCombo);
     layout->addWidget(filterRow);
 
+    // ---- 壁纸库操作（V4.6：库管理 + 播放控制全部放到壁纸库页）----
+    auto* toolRow = new QWidget(pane);
+    auto* toolLayout = new QHBoxLayout(toolRow);
+    toolLayout->setContentsMargins(0, 0, 0, 0);
+    toolLayout->setSpacing(8);
+
+    auto* addImageBtn = new QPushButton(QStringLiteral("添加图片"), toolRow);
+    addImageBtn->setToolTip(QStringLiteral("向壁纸库添加图片（Ctrl+Shift+I）"));
+    auto* addVideoBtn = new QPushButton(QStringLiteral("添加视频"), toolRow);
+    addVideoBtn->setToolTip(QStringLiteral("向壁纸库添加视频（Ctrl+Shift+V）"));
+    auto* removeBtn = new QPushButton(QStringLiteral("移除选中"), toolRow);
+    removeBtn->setObjectName(QStringLiteral("danger"));
+    removeBtn->setToolTip(QStringLiteral("从库中移除选中项（不删除原文件）"));
+    auto* clearBtn = new QPushButton(QStringLiteral("清空库"), toolRow);
+    clearBtn->setObjectName(QStringLiteral("danger"));
+    clearBtn->setToolTip(QStringLiteral("清空整个壁纸库（不删除原文件）"));
+    connect(addImageBtn, &QPushButton::clicked, this, &MainWindow::onAddImages);
+    connect(addVideoBtn, &QPushButton::clicked, this, &MainWindow::onAddVideos);
+    connect(removeBtn, &QPushButton::clicked, this, &MainWindow::onRemoveSelected);
+    connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearAll);
+
+    m_applyButton = new QPushButton(QStringLiteral("应用选中"), toolRow);
+    m_applyButton->setObjectName(QStringLiteral("primary"));
+    m_applyButton->setToolTip(QStringLiteral("把画廊中选中的项应用到桌面（回车）"));
+    m_nextButton = new QPushButton(QStringLiteral("下一张"), toolRow);
+    m_nextButton->setToolTip(QStringLiteral("切换到清单中的下一项（Ctrl+N）"));
+    m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), toolRow);
+    m_pauseButton->setToolTip(QStringLiteral("暂停 / 继续视频壁纸（Ctrl+P）"));
+    auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), toolRow);
+    stopBtn->setToolTip(QStringLiteral("停止视频壁纸，桌面恢复为系统壁纸"));
+    auto* reattachBtn = new QPushButton(QStringLiteral("重新挂载"), toolRow);
+    reattachBtn->setToolTip(QStringLiteral("桌面层失效后重新挂接视频窗口（F5）"));
+    connect(m_applyButton, &QPushButton::clicked, this, &MainWindow::onApplySelected);
+    connect(m_nextButton, &QPushButton::clicked, this, &MainWindow::onNext);
+    connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onTogglePause);
+    connect(stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
+    connect(reattachBtn, &QPushButton::clicked, this, &MainWindow::onReattach);
+
+    toolLayout->addWidget(addImageBtn);
+    toolLayout->addWidget(addVideoBtn);
+    toolLayout->addWidget(removeBtn);
+    toolLayout->addWidget(clearBtn);
+    toolLayout->addSpacing(12);
+    toolLayout->addWidget(m_applyButton);
+    toolLayout->addWidget(m_nextButton);
+    toolLayout->addWidget(m_pauseButton);
+    toolLayout->addWidget(stopBtn);
+    toolLayout->addWidget(reattachBtn);
+    toolLayout->addStretch(1);
+    layout->addWidget(toolRow);
+
     // ---- 画廊（与空状态提示叠放，库为空时给一句人话而不是一片空白）----
     m_galleryStack = new QStackedWidget(pane);
     m_galleryStack->setObjectName(QStringLiteral("galleryStack"));
@@ -672,64 +723,6 @@ QWidget* MainWindow::buildSettingsPage()
     title->setObjectName(QStringLiteral("pageTitle"));
     layout->addWidget(title);
 
-    // ---- 操作（原顶部工具条：库管理 + 播放控制）----
-    auto* actionBox = new QGroupBox(QStringLiteral("操作"), pane);
-    auto* actionForm = new QFormLayout(actionBox);
-
-    auto* libRow = new QWidget(actionBox);
-    auto* libLayout = new QHBoxLayout(libRow);
-    libLayout->setContentsMargins(0, 0, 0, 0);
-    libLayout->setSpacing(8);
-    auto* addImageBtn = new QPushButton(QStringLiteral("添加图片"), libRow);
-    addImageBtn->setToolTip(QStringLiteral("向壁纸库添加图片（Ctrl+Shift+I）"));
-    auto* addVideoBtn = new QPushButton(QStringLiteral("添加视频"), libRow);
-    addVideoBtn->setToolTip(QStringLiteral("向壁纸库添加视频（Ctrl+Shift+V）"));
-    auto* removeBtn = new QPushButton(QStringLiteral("移除选中"), libRow);
-    removeBtn->setObjectName(QStringLiteral("danger"));
-    removeBtn->setToolTip(QStringLiteral("从库中移除选中项（不删除原文件）"));
-    auto* clearBtn = new QPushButton(QStringLiteral("清空库"), libRow);
-    clearBtn->setObjectName(QStringLiteral("danger"));
-    clearBtn->setToolTip(QStringLiteral("清空整个壁纸库（不删除原文件）"));
-    connect(addImageBtn, &QPushButton::clicked, this, &MainWindow::onAddImages);
-    connect(addVideoBtn, &QPushButton::clicked, this, &MainWindow::onAddVideos);
-    connect(removeBtn, &QPushButton::clicked, this, &MainWindow::onRemoveSelected);
-    connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearAll);
-    libLayout->addWidget(addImageBtn);
-    libLayout->addWidget(addVideoBtn);
-    libLayout->addWidget(removeBtn);
-    libLayout->addWidget(clearBtn);
-    libLayout->addStretch(1);
-    actionForm->addRow(QStringLiteral("壁纸库"), libRow);
-
-    auto* playRow = new QWidget(actionBox);
-    auto* playLayout = new QHBoxLayout(playRow);
-    playLayout->setContentsMargins(0, 0, 0, 0);
-    playLayout->setSpacing(8);
-    m_applyButton = new QPushButton(QStringLiteral("应用选中"), playRow);
-    m_applyButton->setObjectName(QStringLiteral("primary"));
-    m_applyButton->setToolTip(QStringLiteral("把画廊中选中的项应用到桌面（回车）"));
-    m_nextButton = new QPushButton(QStringLiteral("下一张"), playRow);
-    m_nextButton->setToolTip(QStringLiteral("切换到清单中的下一项（Ctrl+N）"));
-    m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), playRow);
-    m_pauseButton->setToolTip(QStringLiteral("暂停 / 继续视频壁纸（Ctrl+P）"));
-    auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), playRow);
-    stopBtn->setToolTip(QStringLiteral("停止视频壁纸，桌面恢复为系统壁纸"));
-    auto* reattachBtn = new QPushButton(QStringLiteral("重新挂载"), playRow);
-    reattachBtn->setToolTip(QStringLiteral("桌面层失效后重新挂接视频窗口（F5）"));
-    connect(m_applyButton, &QPushButton::clicked, this, &MainWindow::onApplySelected);
-    connect(m_nextButton, &QPushButton::clicked, this, &MainWindow::onNext);
-    connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onTogglePause);
-    connect(stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
-    connect(reattachBtn, &QPushButton::clicked, this, &MainWindow::onReattach);
-    playLayout->addWidget(m_applyButton);
-    playLayout->addWidget(m_nextButton);
-    playLayout->addWidget(m_pauseButton);
-    playLayout->addWidget(stopBtn);
-    playLayout->addWidget(reattachBtn);
-    playLayout->addStretch(1);
-    actionForm->addRow(QStringLiteral("播放"), playRow);
-    layout->addWidget(actionBox);
-
     // ---- 图片 ----
     auto* imageBox = new QGroupBox(QStringLiteral("图片"), pane);
     auto* imageForm = new QFormLayout(imageBox);
@@ -797,6 +790,7 @@ QWidget* MainWindow::buildSettingsPage()
     m_restoreLast = new QCheckBox(QStringLiteral("启动时恢复上次壁纸"), autoBox);
     connect(m_autoSwitch, &QCheckBox::toggled, this, &MainWindow::onAutoSwitchToggled);
     connect(m_autoStart, &QCheckBox::toggled, this, [this](bool on) { setAutoStart(on); });
+    connect(m_restoreLast, &QCheckBox::toggled, this, [this](bool) { saveSettings(); });
     autoForm->addRow(QString(), m_autoSwitch);
     autoForm->addRow(QString(), m_autoStart);
     autoForm->addRow(QString(), m_restoreLast);
@@ -885,6 +879,16 @@ QWidget* MainWindow::buildSettingsPage()
     fxForm->addRow(QStringLiteral("模糊"), m_fxBlur);
     fxForm->addRow(QStringLiteral("暗角"), m_fxVignette);
     fxForm->addRow(QString(), m_fxGray);
+
+    auto* fxBtnRow = new QHBoxLayout();
+    fxBtnRow->setSpacing(8);
+    auto* resetFxBtn = new QPushButton(QStringLiteral("重置效果"), fxBox);
+    resetFxBtn->setToolTip(QStringLiteral("把所有画面效果恢复为默认值"));
+    connect(resetFxBtn, &QPushButton::clicked, this, &MainWindow::onResetEffects);
+    fxBtnRow->addWidget(resetFxBtn);
+    fxBtnRow->addStretch(1);
+    fxForm->addRow(QString(), fxBtnRow);
+
     auto* fxNote = new QLabel(QStringLiteral("视频即时生效；图片会重新生成一张副本再应用（有缓存，"
                                              "同一套参数只算一次）。"),
                               fxBox);
@@ -960,8 +964,12 @@ QWidget* MainWindow::buildSettingsPage()
     m_pauseOnFullscreen = new QCheckBox(QStringLiteral("全屏应用时暂停"), powerBox);
     m_pauseOnFullscreen->setToolTip(QStringLiteral(
         "前台窗口占满整个显示器时（游戏、全屏播放器）桌面壁纸看不见，暂停解码可省 5%-15% CPU。"));
-    connect(m_pauseOnFullscreen, &QCheckBox::toggled, this,
-            [this](bool) { updateFullscreenGuard(); });
+    connect(m_pauseOnFullscreen, &QCheckBox::toggled, this, [this](bool) {
+        updateFullscreenGuard();
+        saveSettings();
+    });
+    connect(m_pauseOnLock, &QCheckBox::toggled, this, [this](bool) { saveSettings(); });
+    connect(m_pauseOnBattery, &QCheckBox::toggled, this, [this](bool) { saveSettings(); });
     powerForm->addRow(QString(), m_pauseOnLock);
     powerForm->addRow(QString(), m_pauseOnBattery);
     powerForm->addRow(QString(), m_pauseOnFullscreen);
@@ -1121,11 +1129,8 @@ void MainWindow::refreshMonitorRows()
     }
     s.endArray();
 
-    while (QLayoutItem* child = m_monitorForm->takeAt(0)) {
-        if (child->widget()) {
-            child->widget()->deleteLater();
-        }
-        delete child;
+    while (m_monitorForm->rowCount() > 0) {
+        m_monitorForm->removeRow(0);
     }
     m_monitorCombos.clear();
 
@@ -1253,6 +1258,12 @@ DesktopOverlay::Settings MainWindow::collectOverlay() const
 void MainWindow::loadSettings()
 {
     QSettings s;
+    // 整个加载过程禁止回写，否则未加载的控件会用默认值覆盖真实配置（V4.6.1 修复）
+    m_loading = true;
+    // 先读出记忆页码：加载过程中多个 setChecked/setCurrentIndex 会触发 saveSettings，
+    // 可能把 winPage 写回当前导航栏的默认值 0，导致本次加载读取失败。
+    const int savedWinPage = s.value(QStringLiteral("winPage"), 0).toInt();
+
     m_items.clear();
     const int count = s.beginReadArray(QStringLiteral("media"));
     for (int i = 0; i < count; ++i) {
@@ -1412,11 +1423,12 @@ void MainWindow::loadSettings()
     if (!geo.isEmpty()) {
         restoreGeometry(geo);
     }
-    int page = s.value(QStringLiteral("winPage"), 0).toInt();
+    int page = savedWinPage;
     if (page < 0 || page >= m_nav->count()) {
         page = 0;
     }
     m_nav->setCurrentRow(page);
+    m_pages->setCurrentIndex(page);
     updateGalleryMetrics();
 
     m_theme = AppTheme::fromIndex(themeIndex);
@@ -1426,10 +1438,16 @@ void MainWindow::loadSettings()
     refreshList();
     applyTarget();
     onAutoSwitchToggled(m_autoSwitch->isChecked());
+
+    // 加载完成，之后所有改动正常落盘
+    m_loading = false;
 }
 
 void MainWindow::saveSettings()
 {
+    if (m_loading) {
+        return; // 加载期间禁止回写，避免未加载的控件用默认值覆盖真实配置
+    }
     QSettings s;
     s.beginWriteArray(QStringLiteral("media"), m_items.size());
     for (int i = 0; i < m_items.size(); ++i) {
@@ -1864,6 +1882,30 @@ void MainWindow::onEffectChanged()
         });
     }
     m_fxTimer->start();
+}
+
+void MainWindow::onResetEffects()
+{
+    if (m_fxBrightness) {
+        m_fxBrightness->setValue(0);
+    }
+    if (m_fxContrast) {
+        m_fxContrast->setValue(0);
+    }
+    if (m_fxSaturation) {
+        m_fxSaturation->setValue(0);
+    }
+    if (m_fxBlur) {
+        m_fxBlur->setValue(0);
+    }
+    if (m_fxVignette) {
+        m_fxVignette->setValue(0);
+    }
+    if (m_fxGray) {
+        m_fxGray->setChecked(false);
+    }
+    // setValue 会触发 valueChanged，从而调用 onEffectChanged 与 saveSettings
+    updateStatus(QStringLiteral("画面效果已重置"));
 }
 
 // ---------------------------------------------------------------- V4.6：挂件与频谱

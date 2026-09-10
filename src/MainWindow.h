@@ -108,6 +108,7 @@ private slots:
     void onEffectChanged();
     void onOverlayChanged();
     void onSpectrumFrame(const QVector<float>& bands);
+    void onResetEffects();
     void onMonitorsApply();
     void onMonitorsReset();
     void onPortableToggled(bool enabled);
@@ -252,6 +253,9 @@ private:
     QSystemTrayIcon* m_tray = nullptr;
     QMenu* m_trayMenu = nullptr;
     DesktopWatcher* m_watcher = nullptr;
+    /** 加载配置期间禁止回写：加载过程中会触发各种 setChecked/setValue，
+     *  此时尚未加载的控件仍是默认值，一旦被 saveSettings 写回就会永久覆盖真实配置。 */
+    bool m_loading = false;
     bool m_forceQuit = false;
     bool m_videoPaused = false;
     bool m_pausedByPolicy = false;

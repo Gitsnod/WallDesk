@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QDateTime>
+#include <QFontDatabase>
 #include <QLocale>
 #include <QPainter>
 #include <QScreen>
@@ -20,22 +21,54 @@ const char* weekdayName(int day)
     return names[i - 1];
 }
 
-/** 描边文字：先画一圈半透明黑，再画正文，保证在浅色壁纸上也看得清。 */
-void drawShadowedText(QPainter& painter, const QRect& rect, int flags, const QString& text)
+/** 绘制带发光/阴影的文字，保证在浅色或复杂壁纸上都清晰。 */
+void drawShadowedText(QPainter& painter, const QRect& rect, int flags, const QString& text,
+                      const QColor& color)
 {
     painter.save();
-    painter.setPen(QColor(0, 0, 0, 120));
-    for (int dx = -1; dx <= 1; ++dx) {
-        for (int dy = -1; dy <= 1; ++dy) {
-            if (dx == 0 && dy == 0) {
-                continue;
+
+    // 外发光：多层半透明黑叠加，形成柔和描边
+    for (int radius = 3; radius >= 1; --radius) {
+        const int alpha = 60 - radius * 12;
+        painter.setPen(QColor(0, 0, 0, alpha));
+        for (int dx = -radius; dx <= radius; ++dx) {
+            for (int dy = -radius; dy <= radius; ++dy) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                painter.drawText(rect.translated(dx, dy), flags, text);
             }
-            painter.drawText(rect.translated(dx, dy), flags, text);
         }
     }
-    painter.setPen(painter.brush().color());
+
+    // 正文
+    painter.setPen(color);
     painter.drawText(rect, flags, text);
     painter.restore();
+}
+
+/** 尝试找一个现代等宽/无衬线字体；找不到就用系统默认。 */
+QFont pickFont(int pointSize, bool bold = false)
+{
+    QFont font;
+    const QStringList candidates = {
+        QStringLiteral("Microsoft YaHei UI"),
+        QStringLiteral("PingFang SC"),
+        QStringLiteral("Noto Sans CJK SC"),
+        QStringLiteral("Source Han Sans SC"),
+        QStringLiteral("SimHei"),
+    };
+    for (const QString& family : candidates) {
+        const int id = QFontDatabase::addApplicationFont(family);
+        if (id >= 0 || QFontDatabase::hasFamily(family)) {
+            font.setFamily(family);
+            break;
+        }
+    }
+    font.setPointSize(pointSize);
+    font.setBold(bold);
+    font.setStyleStrategy(QFont::PreferAntialias);
+    return font;
 }
 
 } // namespace
@@ -164,126 +197,254 @@ void DesktopOverlay::paintEvent(QPaintEvent*)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
     const int alpha = qBound(0, m_settings.opacity, 100) * 255 / 100;
     QColor ink = m_settings.color;
     ink.setAlpha(alpha);
 
-    // ---- 频谱：贴屏幕底边，宽度铺满 ----
-    if (m_settings.showSpectrum && !m_spectrum.isEmpty()) {
-        const int count = m_spectrum.size();
-        const int areaH = qMax(40, height() / 6);
-        const QRect area(0, height() - areaH, width(), areaH);
-        const int gap = 2;
-        const int bw = qMax(2, (area.width() - gap * (count - 1)) / count);
-        QColor bar = m_settings.spectrumColor;
-        bar.setAlpha(alpha);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(bar);
-        for (int i = 0; i < count; ++i) {
-            const int h = static_cast<int>(qBound(0.0f, m_spectrum.at(i), 1.0f) * area.height());
-            if (h <= 1) {
-                continue;
-            }
-            const int x = area.left() + i * (bw + gap);
-            painter.drawRoundedRect(QRect(x, area.bottom() - h, bw, h), 2, 2);
-        }
-    }
-
-    // ---- 时钟 / 日历 / 文字：按角落堆叠 ----
     const QRect area = contentRect();
     const QDateTime now = QDateTime::currentDateTime();
+    const bool alignRight = (m_settings.position == 1 || m_settings.position == 3);
+    const bool alignCenter = (m_settings.position == 4);
+    const int textFlags = (alignCenter ? Qt::AlignHCenter
+                                       : (alignRight ? Qt::AlignRight : Qt::AlignLeft))
+                          | Qt::AlignVCenter;
 
-    struct Block {
-        QStringList lines;
-        int font;
-    };
-    QList<Block> blocks;
+    // ---- 计算内容尺寸 ----
+    int contentW = 0;
+    int contentH = 0;
+    QFont clockFont = pickFont(m_settings.fontSize + 18, true);
+    QFont dateFont = pickFont(m_settings.fontSize, false);
+    QFont calHeaderFont = pickFont(m_settings.fontSize - 2, true);
+    QFont calDayFont = pickFont(m_settings.fontSize - 6, false);
+    QFont textFont = pickFont(m_settings.fontSize, true);
+
+    int clockH = 0, dateH = 0;
     if (m_settings.showClock) {
-        blocks.append(
-            {QStringList{now.toString(QStringLiteral("HH:mm")),
-                         now.toString(QStringLiteral("M 月 d 日")) + QStringLiteral("  ")
-                             + QString::fromUtf8(weekdayName(now.date().dayOfWeek()))},
-             m_settings.fontSize + 16});
+        QFontMetrics fm(clockFont);
+        clockH = fm.height();
+        dateH = QFontMetrics(dateFont).height();
+        contentW = qMax(contentW, fm.horizontalAdvance(now.toString(QStringLiteral("HH:mm"))));
+        contentW = qMax(contentW,
+                        QFontMetrics(dateFont)
+                            .horizontalAdvance(QStringLiteral("%1  %2")
+                                                   .arg(now.toString(QStringLiteral("M 月 d 日")))
+                                                   .arg(QString::fromUtf8(
+                                                       weekdayName(now.date().dayOfWeek())))));
+        contentH += clockH + 4 + dateH + 20;
     }
+
+    int calW = 0, calH = 0;
+    QStringList calHeaderLines;
+    QStringList calWeekLines;
     if (m_settings.showCalendar) {
         const QDate date = now.date();
         const QDate first(date.year(), date.month(), 1);
-        QStringList lines;
-        lines << QStringLiteral("%1 年 %2 月").arg(date.year()).arg(date.month());
-        lines << QStringLiteral("一 二 三 四 五 六 日");
+        calHeaderLines << QStringLiteral("%1 年 %2 月").arg(date.year()).arg(date.month());
+        calHeaderLines << QStringLiteral("一 二 三 四 五 六 日");
+
         QString week;
-        // 月首前补空格（Qt 的 dayOfWeek: 1=周一）
+        QStringList weeks;
         for (int i = 1; i < first.dayOfWeek(); ++i) {
-            week += QStringLiteral("   ");
+            week += QStringLiteral("    ");
         }
         for (int day = 1; day <= date.daysInMonth(); ++day) {
-            week += QString::asprintf("%2d ", day);
-            if (QDate(date.year(), date.month(), day).dayOfWeek() == 7 || day == date.daysInMonth()) {
-                lines << week;
+            week += QString::asprintf("%2d  ", day);
+            if (QDate(date.year(), date.month(), day).dayOfWeek() == 7
+                || day == date.daysInMonth()) {
+                weeks.append(week);
                 week.clear();
             }
         }
-        blocks.append({lines, m_settings.fontSize - 8});
-    }
-    if (m_settings.showText && !m_settings.text.trimmed().isEmpty()) {
-        blocks.append({m_settings.text.split(QLatin1Char('\n')), m_settings.fontSize});
-    }
+        calWeekLines = weeks;
 
-    if (blocks.isEmpty()) {
-        return;
-    }
-
-    int totalH = 0;
-    int maxW = 0;
-    for (const Block& block : blocks) {
-        for (const QString& line : block.lines) {
-            QFont font = painter.font();
-            font.setPointSize(block.font);
-            const QFontMetrics fm(font);
-            totalH += fm.height() + 2;
-            maxW = qMax(maxW, fm.horizontalAdvance(line));
+        QFontMetrics hfm(calHeaderFont);
+        QFontMetrics dfm(calDayFont);
+        for (const QString& line : calHeaderLines) {
+            calW = qMax(calW, hfm.horizontalAdvance(line));
+            calH += hfm.height() + 4;
         }
-        totalH += 14; // 块间距
+        for (const QString& line : calWeekLines) {
+            calW = qMax(calW, dfm.horizontalAdvance(line));
+            calH += dfm.height() + 3;
+        }
+        contentW = qMax(contentW, calW);
+        contentH += calH + 16;
     }
 
-    int top = area.top();
-    int left = area.left();
+    int textW = 0, textH = 0;
+    QStringList textLines;
+    if (m_settings.showText && !m_settings.text.trimmed().isEmpty()) {
+        textLines = m_settings.text.split(QLatin1Char('\n'));
+        QFontMetrics fm(textFont);
+        for (const QString& line : textLines) {
+            textW = qMax(textW, fm.horizontalAdvance(line));
+            textH += fm.height() + 4;
+        }
+        contentW = qMax(contentW, textW);
+        contentH += textH + 16;
+    }
+
+    if (contentW == 0 || contentH == 0) {
+        // 只有频谱时继续画，否则直接结束
+        if (!m_settings.showSpectrum || m_spectrum.isEmpty()) {
+            return;
+        }
+    }
+
+    // ---- 定位卡片 ----
+    const int padX = 24;
+    const int padY = 20;
+    QRect cardRect;
     switch (m_settings.position) {
-    case 0:
-        break; // 左上
-    case 1:
-        left = area.right() - maxW;
+    case 0: // 左上
+        cardRect = QRect(area.left(), area.top(), contentW + padX * 2, contentH + padY * 2);
         break;
-    case 2:
-        top = area.bottom() - totalH;
+    case 1: // 右上
+        cardRect = QRect(area.right() - contentW - padX * 2, area.top(), contentW + padX * 2,
+                         contentH + padY * 2);
         break;
-    case 3:
-        left = area.right() - maxW;
-        top = area.bottom() - totalH;
+    case 2: // 左下
+        cardRect = QRect(area.left(), area.bottom() - contentH - padY * 2, contentW + padX * 2,
+                         contentH + padY * 2);
+        break;
+    case 3: // 右下
+        cardRect = QRect(area.right() - contentW - padX * 2,
+                         area.bottom() - contentH - padY * 2, contentW + padX * 2,
+                         contentH + padY * 2);
         break;
     default: // 居中
-        left = area.left() + (area.width() - maxW) / 2;
-        top = area.top() + (area.height() - totalH) / 2;
+        cardRect = QRect(area.left() + (area.width() - contentW - padX * 2) / 2,
+                         area.top() + (area.height() - contentH - padY * 2) / 2,
+                         contentW + padX * 2, contentH + padY * 2);
         break;
     }
 
-    painter.setBrush(ink);
-    for (const Block& block : blocks) {
-        QFont font = painter.font();
-        font.setPointSize(block.font);
-        font.setBold(true);
-        painter.setFont(font);
-        const QFontMetrics fm(font);
-        for (const QString& line : block.lines) {
-            const QRect lineRect(left, top, maxW, fm.height());
-            const int align = (m_settings.position == 1 || m_settings.position == 3)
-                                  ? Qt::AlignRight | Qt::AlignVCenter
-                                  : (m_settings.position == 4 ? Qt::AlignHCenter | Qt::AlignVCenter
-                                                              : Qt::AlignLeft | Qt::AlignVCenter);
-            drawShadowedText(painter, lineRect, align, line);
-            top += fm.height() + 2;
+    // ---- 画半透明卡片背景 ----
+    QColor cardBg(0, 0, 0, qBound(0, alpha * 28 / 100, 70)); // 极淡黑底
+    QColor cardBorder = ink;
+    cardBorder.setAlpha(alpha / 6);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(cardBg);
+    painter.drawRoundedRect(cardRect, 16, 16);
+    QPen borderPen(cardBorder);
+    borderPen.setWidth(1);
+    painter.setPen(borderPen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(cardRect.adjusted(1, 1, -1, -1), 16, 16);
+
+    // ---- 绘制内容 ----
+    int y = cardRect.top() + padY;
+    const int left = cardRect.left() + padX;
+    const int right = cardRect.right() - padX;
+
+    if (m_settings.showClock) {
+        painter.setFont(clockFont);
+        const QRect timeRect(left, y, right - left, clockH);
+        drawShadowedText(painter, timeRect, textFlags, now.toString(QStringLiteral("HH:mm")), ink);
+        y += clockH + 4;
+
+        painter.setFont(dateFont);
+        const QString dateText = QStringLiteral("%1  %2")
+                                     .arg(now.toString(QStringLiteral("M 月 d 日")))
+                                     .arg(QString::fromUtf8(weekdayName(now.date().dayOfWeek())));
+        const QRect dateRect(left, y, right - left, dateH);
+        QColor dateInk = ink;
+        dateInk.setAlpha(alpha * 75 / 100);
+        drawShadowedText(painter, dateRect, textFlags, dateText, dateInk);
+        y += dateH + 20;
+    }
+
+    if (m_settings.showCalendar) {
+        painter.setFont(calHeaderFont);
+        QFontMetrics hfm(calHeaderFont);
+        const QRect headerRect(left, y, right - left, hfm.height());
+        drawShadowedText(painter, headerRect, textFlags, calHeaderLines.at(0), ink);
+        y += hfm.height() + 6;
+
+        painter.setFont(calHeaderFont);
+        const QRect weekHeaderRect(left, y, right - left, hfm.height());
+        QColor mutedInk = ink;
+        mutedInk.setAlpha(alpha * 60 / 100);
+        drawShadowedText(painter, weekHeaderRect, textFlags, calHeaderLines.at(1), mutedInk);
+        y += hfm.height() + 6;
+
+        painter.setFont(calDayFont);
+        QFontMetrics dfm(calDayFont);
+        const int lineH = dfm.height() + 3;
+        const int today = now.date().day();
+        for (const QString& line : calWeekLines) {
+            const QRect dayRect(left, y, right - left, lineH);
+            // 高亮今天：在日期文字下画一个柔和圆角背景
+            if (line.contains(QString::number(today))) {
+                QColor accent = m_settings.spectrumColor;
+                accent.setAlpha(alpha / 3);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(accent);
+                const int barW = qMin(dayRect.width(), dfm.horizontalAdvance(QString::number(today)) + 12);
+                const int barH = lineH - 2;
+                int barX = dayRect.left();
+                if (alignCenter) {
+                    barX = dayRect.center().x() - barW / 2;
+                } else if (alignRight) {
+                    barX = dayRect.right() - barW;
+                }
+                painter.drawRoundedRect(
+                    QRect(barX, dayRect.center().y() - barH / 2, barW, barH), 6, 6);
+            }
+            drawShadowedText(painter, dayRect, textFlags, line, ink);
+            y += lineH;
         }
-        top += 14;
+        y += 16;
+    }
+
+    if (!textLines.isEmpty()) {
+        painter.setFont(textFont);
+        QFontMetrics fm(textFont);
+        const int lineH = fm.height() + 4;
+        for (const QString& line : textLines) {
+            const QRect textRect(left, y, right - left, lineH);
+            drawShadowedText(painter, textRect, textFlags, line, ink);
+            y += lineH;
+        }
+    }
+
+    // ---- 频谱：贴屏幕底边，宽度铺满 ----
+    if (m_settings.showSpectrum && !m_spectrum.isEmpty()) {
+        const int count = m_spectrum.size();
+        const int areaH = qMax(50, height() / 5);
+        const QRect spectrumArea(0, height() - areaH, width(), areaH);
+        const int gap = 3;
+        const int bw = qMax(3, (spectrumArea.width() - gap * (count - 1)) / count);
+
+        QLinearGradient grad(0, spectrumArea.bottom(), 0, spectrumArea.top());
+        QColor c1 = m_settings.spectrumColor;
+        c1.setAlpha(alpha);
+        QColor c2 = m_settings.color;
+        c2.setAlpha(alpha / 2);
+        grad.setColorAt(0.0, c1);
+        grad.setColorAt(1.0, c2);
+
+        painter.setPen(Qt::NoPen);
+        for (int i = 0; i < count; ++i) {
+            const float v = qBound(0.0f, m_spectrum.at(i), 1.0f);
+            if (v <= 0.02f) {
+                continue;
+            }
+            const int h = static_cast<int>(v * spectrumArea.height() * 0.85f);
+            const int x = spectrumArea.left() + i * (bw + gap);
+            const int top = spectrumArea.bottom() - h;
+
+            // 倒影式双层柱：主体 + 淡倒影
+            QRect barRect(x, top, bw, h);
+            painter.setBrush(grad);
+            painter.drawRoundedRect(barRect, bw / 2, bw / 2);
+
+            QColor reflection = c1;
+            reflection.setAlpha(alpha / 5);
+            painter.setBrush(reflection);
+            painter.drawRoundedRect(QRect(x, spectrumArea.bottom(), bw, h / 3), bw / 2, bw / 2);
+        }
     }
 }

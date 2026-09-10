@@ -40,12 +40,15 @@ struct MonitorInfo {
 
     QString label() const
     {
-        return QStringLiteral("%1  %2x%3%4")
+        return QStringLiteral("显示器 %1  %2  %3x%4%5")
+            .arg(index + 1)
             .arg(name)
             .arg(rect.width())
             .arg(rect.height())
             .arg(primary ? QStringLiteral("  (主)") : QString());
     }
+
+    int index = 0; // 在枚举结果中的序号，用于 label 展示
 };
 
 /**

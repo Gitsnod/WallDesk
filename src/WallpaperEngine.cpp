@@ -14,6 +14,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 #include <QImage>
 #include <QMetaObject>
 #include <QSettings>
@@ -270,6 +271,26 @@ QList<MonitorInfo> WallpaperEngine::listMonitors()
         },
         reinterpret_cast<LPARAM>(&result));
 
+    // 去重：克隆/镜像模式可能让同一块物理屏出现多次（设备名与分辨率均相同）。
+    // 保留第一个（通常为主排列），避免下拉框里出现「两个显示器 1」。
+    {
+        QHash<QString, int> seen;
+        QList<MonitorInfo> unique;
+        unique.reserve(result.size());
+        for (const MonitorInfo& item : result) {
+            const QString key = QStringLiteral("%1|%2x%3|%4")
+                                    .arg(item.name)
+                                    .arg(item.rect.width())
+                                    .arg(item.rect.height())
+                                    .arg(item.primary ? 1 : 0);
+            if (!seen.contains(key)) {
+                seen.insert(key, unique.size());
+                unique.append(item);
+            }
+        }
+        result = unique;
+    }
+
     // 补上逐屏壁纸需要的显示器标识：IDesktopWallpaper 的枚举顺序与
     // EnumDisplayMonitors 一致，按下标配对即可；取不到就留空并回退全局设置。
     IDesktopWallpaper* wallpaper = nullptr;
@@ -288,6 +309,10 @@ QList<MonitorInfo> WallpaperEngine::listMonitors()
             }
         }
         wallpaper->Release();
+    }
+
+    for (int i = 0; i < result.size(); ++i) {
+        result[i].index = i;
     }
     return result;
 }

@@ -24,8 +24,9 @@ resources/app_preview.png
 
 # 测试与验证产物
 test_wallpaper.bmp
-verify_desktop.png
-verify_settings.png
+test_wallpaper.jpg
+verify_*.png
+verify_*.log
 
 # 系统
 Thumbs.db
