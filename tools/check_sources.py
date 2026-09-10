@@ -30,6 +30,9 @@ FILES = [
     "AppPaths.h", "AppPaths.cpp",
     "Logger.h", "Logger.cpp",
     "SingleInstance.h", "SingleInstance.cpp",
+    "ImageEffects.h", "ImageEffects.cpp",
+    "DesktopOverlay.h", "DesktopOverlay.cpp",
+    "AudioSpectrum.h", "AudioSpectrum.cpp",
 ]
 
 # 声明/定义配对
@@ -43,7 +46,10 @@ PAIRS = [("MainWindow.h", "MainWindow.cpp"),
          ("FullscreenGuard.h", "FullscreenGuard.cpp"),
          ("AppPaths.h", "AppPaths.cpp"),
          ("Logger.h", "Logger.cpp"),
-         ("SingleInstance.h", "SingleInstance.cpp")]
+         ("SingleInstance.h", "SingleInstance.cpp"),
+         ("ImageEffects.h", "ImageEffects.cpp"),
+         ("DesktopOverlay.h", "DesktopOverlay.cpp"),
+         ("AudioSpectrum.h", "AudioSpectrum.cpp")]
 
 # 通过 else 分支隐式覆盖的枚举项：不需要显式出现枚举名
 IMPLICIT_ENUM = {"ScreenTarget::Primary": "target == ScreenTarget::Virtual"}

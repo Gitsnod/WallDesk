@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ImageEffects.h"
+
 #include <QString>
 #include <QStringList>
 #include <QtGlobal>
@@ -66,6 +68,11 @@ public:
 
     /** 在指定窗口句柄上播放媒体文件。hwnd 为宿主窗口（HWND）。 */
     bool play(const QString& file, void* hwnd, int volume, bool loop);
+    /**
+     * 画面效果：映射到 libVLC 的 adjust 滤镜（亮度 / 对比度 / 饱和度）。
+     * 播放中调用即时生效；未播放时保存下来，下次起播自动套用。
+     */
+    void setEffect(const ImageEffect& fx);
     /**
      * 从头重播当前媒体。
      *
@@ -141,6 +148,7 @@ private:
     typedef qint64 (*PfnPlayerGetLength)(void* player);
     typedef int   (*PfnVideoTakeSnapshot)(void* player, unsigned num, const char* path,
                                           unsigned width, unsigned height);
+    typedef void  (*PfnVideoSetAdjustFloat)(void* player, unsigned option, float value);
 
     PfnNew             libvlc_new_ = nullptr;
     PfnRelease         libvlc_release_ = nullptr;
@@ -163,4 +171,8 @@ private:
     PfnPlayerSetTime   libvlc_media_player_set_time_ = nullptr;
     PfnPlayerGetLength libvlc_media_player_get_length_ = nullptr;
     PfnVideoTakeSnapshot libvlc_video_take_snapshot_ = nullptr;
+    PfnVideoSetAdjustFloat libvlc_video_set_adjust_float_ = nullptr;
+
+    /** 当前画面效果，见 setEffect()。 */
+    ImageEffect m_effect;
 };

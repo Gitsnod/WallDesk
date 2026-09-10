@@ -75,16 +75,16 @@ QWidget { color: {text}; }
 QGroupBox {
     background: {card};
     border: 1px solid {border};
-    border-radius: 10px;
-    margin-top: 16px;
-    padding: 14px 12px 12px 12px;
+    border-radius: 8px;
+    margin-top: 10px;
+    padding: 8px 8px 6px 8px;
     font-weight: 600;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 14px;
-    padding: 0 6px;
+    left: 10px;
+    padding: 0 4px;
     color: {subText};
 }
 
@@ -206,19 +206,6 @@ QListWidget#navRail::item {
 }
 QListWidget#navRail::item:hover { background: {hover}; color: {text}; }
 QListWidget#navRail::item:selected { background: {accentSoft}; color: {text}; }
-
-/* ---- 顶部贯穿工具条 ---- */
-QWidget#mainToolbar {
-    background: {card};
-    border-bottom: 1px solid {border};
-}
-QFrame#toolbarSep {
-    background: {border};
-    max-width: 1px;
-    min-width: 1px;
-    margin-left: 8px;
-    margin-right: 8px;
-}
 
 /* ---- 页头 / 空状态（V4.5） ---- */
 QLabel#pageTitle { font-size: 16px; font-weight: 700; color: {text}; padding: 0 2px; }

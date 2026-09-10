@@ -10,6 +10,7 @@
 #include <QList>
 #include <QSettings>
 #include <QtGlobal>
+#include <algorithm>
 #include <string>
 
 namespace {
@@ -218,7 +219,29 @@ bool VlcPlayer::bindAll()
     ok &= bind(libvlc_media_player_set_time_, "libvlc_media_player_set_time");
     ok &= bind(libvlc_media_player_get_length_, "libvlc_media_player_get_length");
     ok &= bind(libvlc_video_take_snapshot_, "libvlc_video_take_snapshot");
+    // 画面效果接口：老版本 libVLC 没有它，缺失时静默降级（仅图片效果可用）
+    bind(libvlc_video_set_adjust_float_, "libvlc_video_set_adjust_float");
     return ok;
+}
+
+void VlcPlayer::setEffect(const ImageEffect& fx)
+{
+    m_effect = fx;
+    if (!m_player || !libvlc_video_set_adjust_float_) {
+        return;
+    }
+    // libvlc_video_adjust_option_t：0=Enable 1=Contrast 2=Brightness 3=Hue
+    //                             4=Saturation 5=Gamma
+    const bool on = !fx.isDefault();
+    libvlc_video_set_adjust_float_(m_player, 0, on ? 1.0f : 0.0f);
+    if (!on) {
+        return;
+    }
+    libvlc_video_set_adjust_float_(m_player, 1, 1.0f + fx.contrast / 100.0f);
+    libvlc_video_set_adjust_float_(m_player, 2, 1.0f + fx.brightness / 100.0f);
+    libvlc_video_set_adjust_float_(
+        m_player, 4,
+        fx.grayscale ? 0.0f : std::clamp(1.0f + fx.saturation / 100.0f, 0.0f, 2.0f));
 }
 
 void VlcPlayer::setProfile(VlcProfile profile)
@@ -306,6 +329,14 @@ bool VlcPlayer::play(const QString& file, void* hwnd, int volume, bool loop)
     }
     // 只对本地文件播放做最小缓冲，降低起播延迟
     libvlc_media_add_option_(media, ":file-caching=300");
+    if (m_effect.blur > 0) {
+        // 视频模糊依赖 VLC 的 gaussianblur 滤镜；与亮度/对比度可以同时生效
+        libvlc_media_add_option_(media, ":video-filter=gaussianblur");
+        libvlc_media_add_option_(media, QStringLiteral(":gaussianblur-sigma=%1")
+                                            .arg(qMax(1, m_effect.blur / 2))
+                                            .toUtf8()
+                                            .constData());
+    }
 
     if (!m_player) {
         m_player = libvlc_media_player_new_(m_instance);
@@ -325,7 +356,11 @@ bool VlcPlayer::play(const QString& file, void* hwnd, int volume, bool loop)
     libvlc_media_player_set_hwnd_(m_player, hwnd);
     libvlc_audio_set_volume_(m_player, volume);
 
-    return libvlc_media_player_play_(m_player) == 0;
+    const bool started = libvlc_media_player_play_(m_player) == 0;
+    if (started) {
+        setEffect(m_effect); // 起播后套用画面效果（滤镜要等 input 就绪）
+    }
+    return started;
 }
 
 bool VlcPlayer::restart()

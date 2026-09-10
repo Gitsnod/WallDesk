@@ -22,6 +22,11 @@ __pycache__/
 # 图标预览（调试用，不入库）
 resources/app_preview.png
 
+# 测试与验证产物
+test_wallpaper.bmp
+verify_desktop.png
+verify_settings.png
+
 # 系统
 Thumbs.db
 Desktop.ini

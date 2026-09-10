@@ -1,17 +1,26 @@
+// 逐屏壁纸需要 IDesktopWallpaper；INITGUID 让 GUID 在本编译单元内生成实体
+#define INITGUID
 #include <windows.h>
+
+#include <shobjidl.h>
 
 #include "WallpaperEngine.h"
 
+#include "AppPaths.h"
 #include "Logger.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QImage>
 #include <QMetaObject>
 #include <QSettings>
 #include <QThread>
 #include <QTimer>
 #include <QtGlobal>
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <string>
@@ -36,6 +45,79 @@ constexpr int kMaxEndTicks = 2;
  * 取值必须大于看护周期，否则可能一整轮都没踩进这个窗口。
  */
 constexpr qint64 kLoopPreRollMs = 1200;
+
+/**
+ * 画面效果处理后图片的落盘位置：按「原图 + 修改时间 + 参数指纹」命名，
+ * 同一张图同一套参数只处理一次，重复应用直接命中缓存。
+ */
+QString effectCachePath(const QString& source, const ImageEffect& fx)
+{
+    const QFileInfo info(source);
+    const QByteArray seed = (source + QLatin1Char('|')
+                             + info.lastModified().toString(Qt::ISODateWithMs) + QLatin1Char('|')
+                             + fx.key())
+                                .toUtf8();
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(seed, QCryptographicHash::Md5).toHex());
+    return AppPaths::dataDir() + QStringLiteral("/effects/") + hash + QStringLiteral(".png");
+}
+
+/** 需要效果时生成（或复用）处理后的副本，输出写入 targetOut。 */
+bool prepareImageTarget(const QString& path, const ImageEffect& fx, QString* targetOut,
+                        QString* err)
+{
+    const QFileInfo info(path);
+    if (!info.exists()) {
+        if (err) {
+            *err = QStringLiteral("文件不存在：%1").arg(path);
+        }
+        return false;
+    }
+    const QString absolute = info.absoluteFilePath();
+    if (fx.isDefault()) {
+        *targetOut = absolute;
+        return true;
+    }
+    const QString cache = effectCachePath(absolute, fx);
+    if (!QFileInfo::exists(cache)) {
+        QImage source;
+        if (!source.load(absolute)) {
+            if (err) {
+                *err = QStringLiteral("无法读取图片：%1").arg(absolute);
+            }
+            return false;
+        }
+        QDir().mkpath(QFileInfo(cache).absolutePath());
+        if (!ImageEffects::apply(source, fx).save(cache, "PNG")) {
+            if (err) {
+                *err = QStringLiteral("画面效果处理失败：%1").arg(absolute);
+            }
+            return false;
+        }
+    }
+    *targetOut = cache;
+    return true;
+}
+
+/** IDesktopWallpaper 的填充位姿枚举与本程序 ImageFit 的映射。 */
+DESKTOP_WALLPAPER_POSITION wallpaperPosition(ImageFit fit)
+{
+    switch (fit) {
+    case ImageFit::Fill:
+        return DWPOS_FILL;
+    case ImageFit::Fit:
+        return DWPOS_FIT;
+    case ImageFit::Stretch:
+        return DWPOS_STRETCH;
+    case ImageFit::Tile:
+        return DWPOS_TILE;
+    case ImageFit::Center:
+        return DWPOS_CENTER;
+    case ImageFit::Span:
+        return DWPOS_SPAN;
+    }
+    return DWPOS_FILL;
+}
 
 /** 判断窗口是否覆盖整个主屏幕（允许少量误差）。 */
 bool coversScreen(HWND hwnd)
@@ -187,6 +269,26 @@ QList<MonitorInfo> WallpaperEngine::listMonitors()
             return TRUE;
         },
         reinterpret_cast<LPARAM>(&result));
+
+    // 补上逐屏壁纸需要的显示器标识：IDesktopWallpaper 的枚举顺序与
+    // EnumDisplayMonitors 一致，按下标配对即可；取不到就留空并回退全局设置。
+    IDesktopWallpaper* wallpaper = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_DesktopWallpaper, nullptr, CLSCTX_ALL,
+                                   IID_IDesktopWallpaper,
+                                   reinterpret_cast<void**>(&wallpaper)))
+        && wallpaper) {
+        UINT count = 0;
+        if (SUCCEEDED(wallpaper->GetMonitorDevicePathCount(&count))) {
+            for (UINT i = 0; i < count && i < static_cast<UINT>(result.size()); ++i) {
+                LPWSTR id = nullptr;
+                if (SUCCEEDED(wallpaper->GetMonitorDevicePathAt(i, &id)) && id) {
+                    result[static_cast<int>(i)].id = QString::fromWCharArray(id);
+                    CoTaskMemFree(id);
+                }
+            }
+        }
+        wallpaper->Release();
+    }
     return result;
 }
 
@@ -224,15 +326,14 @@ bool WallpaperEngine::loadBackendFrom(const QString& directory, QString* err)
     return m_vlc.loadFromDirectory(directory, err);
 }
 
-bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, QString* err)
+bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, const ImageEffect& fx,
+                                 QString* err)
 {
-    const QFileInfo info(path);
-    if (!info.exists()) {
-        if (err) {
-            *err = QStringLiteral("文件不存在：%1").arg(path);
-        }
+    QString target;
+    if (!prepareImageTarget(path, fx, &target, err)) {
         return false;
     }
+    const QFileInfo info(target);
 
     // 填充方式写入注册表，随后必须再触发一次 SPI_SETDESKWALLPAPER 才会生效
     QSettings reg(QStringLiteral(R"(HKEY_CURRENT_USER\Control Panel\Desktop)"), QSettings::NativeFormat);
@@ -263,7 +364,7 @@ bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, QString* err
     // 参数与上次完全一致且上次已成功：直接返回，省掉一次注册表写入和一次系统广播
     const QString absolute = info.absoluteFilePath();
     if (m_lastImageOk && m_lastImagePath == absolute && m_lastStyle == style
-        && m_lastTile == tile) {
+        && m_lastTile == tile && m_lastEffect == fx.key()) {
         // 参数未变也要保证视频已停：图片与视频互斥
         stopVideo();
         return true;
@@ -288,12 +389,55 @@ bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, QString* err
     m_lastImagePath = absolute;
     m_lastStyle = style;
     m_lastTile = tile;
+    m_lastEffect = fx.key();
     m_lastImageOk = true;
 
     // 图片与视频互斥：先让新壁纸生效，再撤掉视频窗口，
     // 这样切换过程中桌面不会出现「先黑一下再出图」的顿挫。
     stopVideo();
     return true;
+}
+
+bool WallpaperEngine::applyImageToMonitor(const QString& path, const QString& monitorId,
+                                          ImageFit fit, const ImageEffect& fx, QString* err)
+{
+    if (monitorId.isEmpty()) {
+        return applyImage(path, fit, fx, err);
+    }
+    QString target;
+    if (!prepareImageTarget(path, fx, &target, err)) {
+        return false;
+    }
+
+    IDesktopWallpaper* wallpaper = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_DesktopWallpaper, nullptr, CLSCTX_ALL,
+                                  IID_IDesktopWallpaper, reinterpret_cast<void**>(&wallpaper));
+    if (FAILED(hr) || !wallpaper) {
+        // 系统不支持逐屏接口（极老的 Windows）：退回全局设置，功能不丢
+        return applyImage(path, fit, fx, err);
+    }
+
+    wallpaper->SetPosition(wallpaperPosition(fit));
+    hr = wallpaper->SetWallpaper(reinterpret_cast<LPCWSTR>(monitorId.utf16()),
+                                 reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(target).utf16()));
+    wallpaper->Release();
+    if (FAILED(hr)) {
+        if (err) {
+            *err = QStringLiteral("逐屏设置壁纸失败：%1（错误码 0x%2）")
+                       .arg(QFileInfo(path).fileName())
+                       .arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0'));
+        }
+        return false;
+    }
+    // 逐屏接口不走 SPI，去重状态作废，下次全局应用才会重新广播
+    m_lastImageOk = false;
+    return true;
+}
+
+void WallpaperEngine::setVideoEffect(const ImageEffect& fx)
+{
+    m_videoEffect = fx;
+    m_vlc.setEffect(fx);
 }
 
 HWND WallpaperEngine::resolveWorkerW()

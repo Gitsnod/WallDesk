@@ -26,7 +26,7 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_VERSION = "4.5.0"
+DEFAULT_VERSION = "4.6.0"
 
 # 发布时一并携带的文档
 EXTRA_DOCS = ["LICENSE", "README.md", "THIRD-PARTY-NOTICES.txt"]

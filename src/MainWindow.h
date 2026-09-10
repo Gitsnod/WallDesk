@@ -6,6 +6,9 @@
 #include <QSystemTrayIcon>
 
 #include "AppTheme.h"
+#include "AudioSpectrum.h"
+#include "DesktopOverlay.h"
+#include "ImageEffects.h"
 #include "WallpaperEngine.h"
 
 class DesktopWatcher;
@@ -14,7 +17,9 @@ class ThumbnailLoader;
 class QAction;
 class QCheckBox;
 class QComboBox;
+class QFormLayout;
 class QLabel;
+class QLineEdit;
 class QListWidget;
 class QMenu;
 class QProgressBar;
@@ -23,12 +28,15 @@ class QRadioButton;
 class QSlider;
 class QSpinBox;
 class QStackedWidget;
+class QTableWidget;
 class QTimer;
 
 struct MediaItem {
     enum class Type { Image, Video };
     Type type = Type::Image;
     QString path;
+    bool favorite = false; // 收藏（V4.6）
+    qint64 added = 0;      // 加入库的时间戳（毫秒），用于排序
 };
 
 /**
@@ -85,6 +93,23 @@ private slots:
     void onClearThumbCache();
     void onThumbSizeChanged(int index);
     void onAbout();
+
+    // V4.6：检索 / 收藏 / 策略 / 场景 / 效果 / 挂件 / 频谱
+    void onSearchChanged();
+    void onFilterChanged();
+    void onSortChanged();
+    void onToggleFavorite();
+    void onGalleryContextMenu(const QPoint& pos);
+    void onSwitchModeChanged();
+    void onSceneToggled();
+    void onAddScene();
+    void onRemoveScene();
+    void onSceneTick();
+    void onEffectChanged();
+    void onOverlayChanged();
+    void onSpectrumFrame(const QVector<float>& bands);
+    void onMonitorsApply();
+    void onMonitorsReset();
     void onPortableToggled(bool enabled);
     void onVideoFailed(const QString& reason);
     void onVideoRecovered();
@@ -96,12 +121,22 @@ private:
     void buildActions();
     QWidget* buildLibraryPage();
     QWidget* buildSettingsPage();
-    QWidget* buildToolsPage();
+    /** 多屏：为每台显示器单独指定壁纸（V4.6）。 */
+    QWidget* buildMonitorsPage();
+    /** 按当前显示器与库内容重建多屏页的每一行。 */
+    void refreshMonitorRows();
+    /** 从界面控件收集画面效果参数。 */
+    ImageEffect collectEffect() const;
+    /** 从界面控件收集挂件参数。 */
+    DesktopOverlay::Settings collectOverlay() const;
+    /** 按当前过滤 / 排序条件重建可见项下标。 */
+    void rebuildVisible();
+    /** 自动切换时按策略挑下一项；返回 -1 表示没有候选。 */
+    int pickNextIndex() const;
+    /** 定时场景：返回当前时间命中的行号，无命中返回 -1。 */
+    int currentSceneRow() const;
     /** 壁纸库为空时的引导提示页。 */
     QWidget* buildEmptyHint();
-    /** 底部常驻播放控制条：所有页面共用，消除功能按钮重复。 */
-    /** 顶部贯穿工具条：库管理与播放控制并排，所有页面共用一份。 */
-    QWidget* buildMainToolbar();
     /** 按「缩略图尺寸」设置刷新单元格尺寸；窗口缩放不再改变它（V4.5）。 */
     void updateGalleryMetrics();
     /** 只为可见区域发起缩略图请求，滚动/缩放后延迟触发（V4.5 内存优化）。 */
@@ -157,6 +192,53 @@ private:
     QCheckBox* m_videoThumbnails = nullptr;
     QCheckBox* m_restoreLast = nullptr;
     QCheckBox* m_portable = nullptr;
+
+    // ---- V4.6 新增：检索 / 收藏 ----
+    QLineEdit* m_searchEdit = nullptr;
+    QComboBox* m_filterCombo = nullptr;
+    QComboBox* m_sortCombo = nullptr;
+    QList<int> m_visible;       // 行号 → m_items 下标（过滤 / 排序后的映射）
+    QList<int> m_shuffleQueue;  // 不重复随机的播放队列
+    int m_shufflePos = 0;
+
+    // ---- V4.6 新增：切换策略 ----
+    QComboBox* m_switchModeCombo = nullptr;
+    QComboBox* m_switchScopeCombo = nullptr;
+
+    // ---- V4.6 新增：定时场景 ----
+    QCheckBox* m_sceneEnabled = nullptr;
+    QTableWidget* m_sceneTable = nullptr;
+    QTimer* m_sceneTimer = nullptr;
+    int m_activeSceneRow = -1;
+
+    // ---- V4.6 新增：画面效果 ----
+    QSlider* m_fxBrightness = nullptr;
+    QSlider* m_fxContrast = nullptr;
+    QSlider* m_fxSaturation = nullptr;
+    QSlider* m_fxBlur = nullptr;
+    QSlider* m_fxVignette = nullptr;
+    QCheckBox* m_fxGray = nullptr;
+    QTimer* m_fxTimer = nullptr; // 滑块防抖：拖动过程中不重复重算大图
+
+    // ---- V4.6 新增：挂件与频谱 ----
+    DesktopOverlay* m_overlay = nullptr;
+    QCheckBox* m_overlayEnabled = nullptr;
+    QCheckBox* m_overlayClock = nullptr;
+    QCheckBox* m_overlayCalendar = nullptr;
+    QCheckBox* m_overlayText = nullptr;
+    QLineEdit* m_overlayTextEdit = nullptr;
+    QComboBox* m_overlayPosCombo = nullptr;
+    QComboBox* m_overlayScreenCombo = nullptr;
+    QSpinBox* m_overlaySize = nullptr;
+    AudioSpectrum* m_spectrum = nullptr;
+    QCheckBox* m_spectrumEnabled = nullptr;
+    QSpinBox* m_spectrumBands = nullptr;
+
+    // ---- V4.6 新增：多屏 ----
+    QWidget* m_monitorRows = nullptr;
+    QFormLayout* m_monitorForm = nullptr;
+    QList<QComboBox*> m_monitorCombos;
+
     QLabel* m_status = nullptr;
     QLabel* m_libraryTitle = nullptr;
     QStackedWidget* m_galleryStack = nullptr;

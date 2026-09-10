@@ -8,6 +8,7 @@
 #include <atomic>
 #include <functional>
 
+#include "ImageEffects.h"
 #include "VlcPlayer.h"
 
 class QTimer;
@@ -32,6 +33,8 @@ enum class ScreenTarget {
 /** 显示器信息。坐标使用虚拟桌面坐标系，可为负值。 */
 struct MonitorInfo {
     QString name;      // 设备名，形如 \\.\DISPLAY1
+    /** IDesktopWallpaper 用的显示器标识（设备路径），逐屏设置壁纸时需要。 */
+    QString id;
     QRect rect;        // 在虚拟桌面中的位置与尺寸
     bool primary = false;
 
@@ -76,8 +79,22 @@ public:
     /** 设置视频覆盖范围；修改后若正在播放会自动重新铺满。 */
     void setTarget(ScreenTarget target, int monitorIndex);
 
-    bool applyImage(const QString& path, ImageFit fit, QString* err = nullptr);
+    /**
+     * 应用图片壁纸。fx 非空时会先在本地生成处理后的副本再交给系统，
+     * 结果按「文件 + 参数指纹」缓存，重复应用不重复计算。
+     */
+    bool applyImage(const QString& path, ImageFit fit, const ImageEffect& fx,
+                    QString* err = nullptr);
+    /**
+     * 只给某一台显示器设置壁纸（IDesktopWallpaper 逐屏接口）。
+     * monitorId 为空或接口不可用时回退为全局设置。
+     */
+    bool applyImageToMonitor(const QString& path, const QString& monitorId, ImageFit fit,
+                             const ImageEffect& fx, QString* err = nullptr);
     bool applyVideo(const QString& path, int volume, QString* err = nullptr);
+
+    /** 视频画面效果：映射到 libVLC 的 adjust 滤镜，播放中也能即时改。 */
+    void setVideoEffect(const ImageEffect& fx);
 
     /** 切换解码档位。已加载时重建 libvlc 实例并从原位置续播。 */
     void setPerformanceProfile(VlcProfile profile);
@@ -157,6 +174,7 @@ private:
     bool m_stopRequested = false;  // 已请求停止，宿主窗口允许销毁
 
     QString m_currentFile;         // 当前视频，供重挂续播使用
+    ImageEffect m_videoEffect;     // 当前生效的视频画面效果
     int m_volume = 0;
     qint64 m_lastTime = 0;         // 最近一次正常播放的位置（毫秒）
     int m_recoverFails = 0;        // 连续重挂失败计数，超过阈值即放弃并上报
@@ -168,5 +186,6 @@ private:
     QString m_lastImagePath;
     QString m_lastStyle;
     QString m_lastTile;
+    QString m_lastEffect;      // 上次生效的画面效果指纹，参数变了要重新广播
     bool m_lastImageOk = false;
 };

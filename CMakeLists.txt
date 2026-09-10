@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(WallDesk VERSION 4.5.0 LANGUAGES CXX)
+project(WallDesk VERSION 4.6.0 LANGUAGES CXX)
 
 option(WALLDESK_DEPLOY_QT "构建后自动运行 windeployqt 部署 Qt 运行时" OFF)
 
@@ -30,6 +30,9 @@ set(PROJECT_SOURCES
     src/AppPaths.cpp
     src/Logger.cpp
     src/SingleInstance.cpp
+    src/ImageEffects.cpp
+    src/DesktopOverlay.cpp
+    src/AudioSpectrum.cpp
     src/MainWindow.h
     src/WallpaperEngine.h
     src/VlcPlayer.h
@@ -41,6 +44,9 @@ set(PROJECT_SOURCES
     src/AppPaths.h
     src/Logger.h
     src/SingleInstance.h
+    src/ImageEffects.h
+    src/DesktopOverlay.h
+    src/AudioSpectrum.h
 )
 
 # 内嵌 VLC 运行时：由 tools/pack_vlc.py 生成，缺失时自动降级为外部搜索
