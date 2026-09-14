@@ -1,0 +1,5 @@
+{
+  "_comment": "本地提交 SHA -> 远端重放提交 SHA。Git Data API 推送时产生（SHA 必然不同），标签同步时用它重定向 tag 目标。",
+  "c0fbc757a589b6fc7c3cd071e7aaff083557f8da": "6b240cbc2a056c0066fdb34bf2872a73859a4d73",
+  "9f6a3422065c7ccf83852a992a3a767dba8c4a80": "4b6a8bf0595dd12975fc4dbac1fc53c30db5fcdd"
+}
