@@ -3,6 +3,7 @@ build/
 build-*/
 dist/
 out/
+tools/unittest/build/
 
 # 内嵌 VLC 打包产物（体积大，由 tools/pack_vlc.py 按需生成，不入库）
 src/VlcBundle.bin

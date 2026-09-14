@@ -33,6 +33,9 @@ FILES = [
     "ImageEffects.h", "ImageEffects.cpp",
     "DesktopOverlay.h", "DesktopOverlay.cpp",
     "AudioSpectrum.h", "AudioSpectrum.cpp",
+    "PresetManager.h", "PresetManager.cpp",
+    "OnlineSources.h", "OnlineSources.cpp",
+    "MediaInfo.h", "MediaInfo.cpp",
 ]
 
 # 声明/定义配对
@@ -49,7 +52,10 @@ PAIRS = [("MainWindow.h", "MainWindow.cpp"),
          ("SingleInstance.h", "SingleInstance.cpp"),
          ("ImageEffects.h", "ImageEffects.cpp"),
          ("DesktopOverlay.h", "DesktopOverlay.cpp"),
-         ("AudioSpectrum.h", "AudioSpectrum.cpp")]
+         ("AudioSpectrum.h", "AudioSpectrum.cpp"),
+         ("PresetManager.h", "PresetManager.cpp"),
+         ("OnlineSources.h", "OnlineSources.cpp"),
+         ("MediaInfo.h", "MediaInfo.cpp")]
 
 # 通过 else 分支隐式覆盖的枚举项：不需要显式出现枚举名
 IMPLICIT_ENUM = {"ScreenTarget::Primary": "target == ScreenTarget::Virtual"}
@@ -87,12 +93,42 @@ def strip_signals(text):
 
 
 def strip_comments(text):
-    """剔除 C++ 单行/多行注释与字符串字面量，避免它们干扰声明/定义匹配。"""
-    text = re.sub(r"//[^\n]*", "", text)
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    """剔除 C++ 单行/多行注释与字符串字面量，避免它们干扰声明/定义匹配。
+
+    顺序必须是「先剥字符串、再剥注释」：反过来的话，字符串里的 `//`
+    （例如 `"https://..."`）会被当成行注释起点，把该行后半段连同后续代码一起删掉，
+    造成大面积伪「未定义」误报。
+    """
     text = re.sub(r'"(\\.|[^"\\])*"', '""', text)
     text = re.sub(r"'(\\.|[^'\\])*'", "''", text)
+    text = re.sub(r"//[^\n]*", "", text)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     return text
+
+
+def primary_class(header_text, source_text, file_stem):
+    """确定该配对实际使用的类名。
+
+    头文件里的 `class/struct` 未必等价于文件名，也未必是第一个：
+    - 前置声明（`class QTimer;`，无 `{}` 以 `;` 收尾）要先排除；
+    - 文件里可能有多个类/结构（如 MediaInfo.h 里 MediaInfo 是数据 struct，
+      真正带实现的是 MediaInfoProbe）；
+    - 有的头文件只有命名空间（ImageEffects.h）。
+
+    判据：取出头文件里所有“真正的类/结构名”，再选那个在 cpp 中以 `名::` 形式
+    实际出现过的；都没有则退回文件名。若头文件用的是命名空间（如
+    `namespace ImageEffects { QImage apply(...); }`），则优先取命名空间名。
+    """
+    # 命名空间取值：非匿名、且其内确实声明了函数
+    for ns in re.findall(r"^\s*namespace\s+(\w+)\s*\{", header_text, re.M):
+        if re.search(rf"\b{re.escape(ns)}::\w+\s*\(", source_text):
+            return ns
+    declared = re.findall(r"^\s*(?:class|struct)\s+(\w+)\s*(?::|\{)", header_text, re.M)
+    defined_in_src = set(re.findall(r"\b(\w+)::\w+\s*\(", source_text))
+    for name in declared:
+        if name in defined_in_src:
+            return name
+    return declared[0] if declared else file_stem
 
 
 def main():
@@ -100,27 +136,33 @@ def main():
     os.chdir(root)
     texts = {name: read(name) for name in FILES}
 
-    # 1) 括号平衡
+    # 1) 括号平衡。按“全文计数”判定，不按行——跨行参数列表会让逐行计数失真；
+    #    同时必须复用 strip_comments（先剥字符串再剥注释），否则字符串里的 `//`
+    #    会截断代码，造成伪不平衡。
     for name, text in texts.items():
-        stripped = re.sub(r"//[^\n]*", "", text)
-        stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.S)
-        stripped = re.sub(r'"(\\.|[^"\\])*"', '""', stripped)
-        stripped = re.sub(r"'(\\.|[^'\\])*'", "''", stripped)
+        stripped = strip_comments(text)
         for op, cl in [("{", "}"), ("(", ")"), ("[", "]")]:
             if stripped.count(op) != stripped.count(cl):
                 issues.append(f"[括号] {name}: {op}{cl} 不平衡 "
                               f"({stripped.count(op)} vs {stripped.count(cl)})")
 
     # 2) 声明 → 定义
+    #    定义可能写成 `Cls::fn(` 或自由函数 `fn(`；两种都算已定义。
     for header, source in PAIRS:
+        cls = primary_class(strip_comments(texts[header]), strip_comments(texts[source]), header[:-2])
         decls = re.findall(DECL_RE, strip_comments(strip_signals(texts[header])), re.M)
+        src_defs = strip_comments(texts[source])
         for decl in decls:
-            if f"{header[:-2]}::{decl}" not in strip_comments(texts[source]):
-                issues.append(f"[符号] {header} 声明的 {decl}() 在 {source} 中未定义")
+            if f"{cls}::{decl}" in src_defs:
+                continue
+            # 自由函数（非成员）或定义处返回类型换了书写形式：按“函数名(”兜底
+            if re.search(rf"(?<![\w:]){re.escape(decl)}\s*\(", src_defs):
+                continue
+            issues.append(f"[符号] {header} 声明的 {decl}() 在 {source} 中未定义")
 
     # 3) 定义 → 声明（反向）：漏声明会直接编译失败，必须拦住
     for header, source in PAIRS:
-        cls = header[:-2]
+        cls = primary_class(strip_comments(texts[header]), strip_comments(texts[source]), header[:-2])
         src_clean = strip_comments(texts[source])
         hdr_clean = strip_comments(texts[header])
         for name in sorted(set(re.findall(rf"\b{cls}::(\w+)\s*\(", src_clean))):
@@ -157,12 +199,15 @@ def main():
                 continue  # 由 else 分支隐式覆盖
             issues.append(f"[枚举] {key} 未在 {target} 中处理")
 
-    # 7) 裸指针成员必须在 cpp 中被赋值。
+    # 7) 裸指针成员必须在 cpp 中被创建或赋值。
     #    V4 曾抓到 m_pauseButton 只声明未创建，运行到解引用即崩溃。
+    #    创建方式包含 `m_x = new ...`、`m_x = qobject_cast...`、构造函数初始化列表
+    #    `m_x(nullptr)` / `m_x(new ...)`。
     for header, source in PAIRS:
         for member in re.findall(r"^\s+Q\w+\s*\*\s*(m_\w+)\s*=", texts[header], re.M):
-            if f"{member} =" not in texts[source]:
-                issues.append(f"[成员] {header} 声明的 {member} 从未在 {source} 中赋值")
+            if re.search(rf"\b{re.escape(member)}\s*(=|\(|,)", texts[source]):
+                continue
+            issues.append(f"[成员] {header} 声明的 {member} 从未在 {source} 中赋值")
 
     print("=" * 46)
     if issues:
