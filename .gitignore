@@ -1,5 +1,6 @@
 # 构建产物
 build/
+build-*/
 dist/
 out/
 
@@ -22,12 +23,24 @@ __pycache__/
 # 图标预览（调试用，不入库）
 resources/app_preview.png
 
-# 测试与验证产物
-test_wallpaper.bmp
-test_wallpaper.jpg
-verify_*.png
-verify_*.log
-
 # 系统
 Thumbs.db
 Desktop.ini
+
+# 调试残留物（壁纸测试图、UI 校验截图）
+test_wallpaper.bmp
+verify_*.png
+
+# 本地临时脚本与日志（打包/调试用，不入库）
+_release_*.ps1
+_release_*.bat
+_release_log.txt
+_smoke_*.ps1
+_smoke_log.txt
+_e2e_*.bat
+_e2e_log.txt
+_build_*.bat
+_final_*.bat
+_probe*.bat
+_ps.bat
+*_log.txt

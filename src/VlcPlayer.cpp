@@ -310,7 +310,7 @@ bool VlcPlayer::createInstance()
     return m_instance != nullptr;
 }
 
-bool VlcPlayer::play(const QString& file, void* hwnd, int volume, bool loop)
+bool VlcPlayer::play(const QString& file, void* hwnd, int volume, bool loop, bool muteOutput)
 {
     if (!m_dll || !m_instance) {
         return false;
@@ -321,6 +321,11 @@ bool VlcPlayer::play(const QString& file, void* hwnd, int volume, bool loop)
     void* media = libvlc_media_new_path_(m_instance, QDir::toNativeSeparators(file).toUtf8().constData());
     if (!media) {
         return false;
+    }
+
+    // 彻底关掉音频轨：不谈音量，连解码都不做（壁纸默认静音，省一份开销）
+    if (muteOutput) {
+        libvlc_media_add_option_(media, ":no-audio");
     }
 
     if (loop) {

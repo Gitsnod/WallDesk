@@ -7,6 +7,9 @@
 #include "DesktopWatcher.h"
 #include "FullscreenGuard.h"
 #include "Logger.h"
+#include "MediaInfo.h"
+#include "OnlineSources.h"
+#include "PresetManager.h"
 #include "ThumbnailLoader.h"
 #include "VlcBundle.h"
 
@@ -31,6 +34,10 @@
 #include <QHeaderView>
 #include <QIcon>
 #include <QLabel>
+#include <QInputDialog>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListView>
@@ -64,8 +71,10 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <memory>
 #include <random>
 #include <thread>
+#include <vector>
 
 namespace {
 constexpr int kRoleType = Qt::UserRole + 1;
@@ -282,12 +291,48 @@ MainWindow::MainWindow(QWidget* parent)
     buildUi();
     refreshMonitors(); // 需在 loadSettings 之前，配置里保存的是显示器序号
 
-    // 定时器必须先于 loadSettings 创建：加载配置时会依据开关立即启动它
+    // 两个预设下拉互为镜像：改任一个都同步另一个，避免「同一份状态两个入口」出现分歧
+    if (m_presetCombo && m_monitorPresetCombo) {
+        const auto sync = [this](QComboBox* source, QComboBox* target) {
+            return [this, source, target]() {
+                if (!target) {
+                    return;
+                }
+                const int index = source->currentIndex();
+                if (index < 0 || index >= target->count()) {
+                    return;
+                }
+                if (target->currentIndex() != index) {
+                    const QSignalBlocker blocker(target);
+                    target->setCurrentIndex(index);
+                }
+            };
+        };
+        connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                sync(m_presetCombo, m_monitorPresetCombo));
+        connect(m_monitorPresetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                sync(m_monitorPresetCombo, m_presetCombo));
+    }
+
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, &MainWindow::onNext);
 
     m_fullscreen = new FullscreenGuard(this);
     connect(m_fullscreen, &FullscreenGuard::fullscreenChanged, this, &MainWindow::onFullscreenChanged);
+
+    // 在线图源：下载完成后自动并入壁纸库
+    m_online = new OnlineSources(this);
+    connect(m_online, &OnlineSources::imageReady, this, &MainWindow::onOnlineImageReady);
+    connect(m_online, &OnlineSources::failed, this, &MainWindow::onOnlineFailed);
+    connect(m_online, &OnlineSources::progress, this, &MainWindow::onOnlineProgress);
+    connect(m_online, &OnlineSources::finished, this, [this]() {
+        if (m_urlImportBtn) {
+            m_urlImportBtn->setEnabled(true);
+        }
+        if (m_bingBtn) {
+            m_bingBtn->setEnabled(true);
+        }
+    });
 
     setupWatcher();
     loadSettings();
@@ -329,12 +374,42 @@ void MainWindow::setupTray()
     m_trayMenu = new QMenu(this);
     m_trayMenu->addAction(QStringLiteral("显示主界面"), this, &QWidget::showNormal);
     m_trayMenu->addAction(QStringLiteral("下一张"), this, &MainWindow::onNext);
+
+    // V4.7：托盘里直接切预设——场景预设最大的价值就是「不想开窗口时一键换套桌面」
+    m_trayPresetMenu = m_trayMenu->addMenu(QStringLiteral("切换场景预设"));
     m_trayMenu->addAction(QStringLiteral("停止壁纸"), this, &MainWindow::onStop);
     m_trayMenu->addSeparator();
     m_trayMenu->addAction(QStringLiteral("退出"), this, &MainWindow::onQuit);
     m_tray->setContextMenu(m_trayMenu);
     connect(m_tray, &QSystemTrayIcon::activated, this, &MainWindow::onTrayActivated);
     m_tray->show();
+
+    if (m_trayPresetMenu) {
+        connect(m_trayPresetMenu, &QMenu::aboutToShow, this, [this]() {
+            m_trayPresetMenu->clear();
+            m_presets = PresetManager::load(); // 每次展开重读：用户可能刚在设置页存过
+            if (m_presets.isEmpty()) {
+                m_trayPresetMenu->addAction(QStringLiteral("（还没有预设）"))->setEnabled(false);
+                return;
+            }
+            for (const WallpaperPreset& preset : m_presets) {
+                const QString name = preset.name;
+                m_trayPresetMenu->addAction(name, this, [this, name]() {
+                    for (const WallpaperPreset& candidate : m_presets) {
+                        if (candidate.name.compare(name, Qt::CaseInsensitive) == 0) {
+                            applyPreset(candidate);
+                            refreshPresetCombos();
+                            const int index = m_presetCombo->findText(name);
+                            if (index >= 0) {
+                                m_presetCombo->setCurrentIndex(index);
+                            }
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+    }
 }
 
 // ---------------------------------------------------------------- 界面构建
@@ -590,19 +665,87 @@ QWidget* MainWindow::buildLibraryPage()
     m_filterCombo->addItem(QStringLiteral("图片"), 1);
     m_filterCombo->addItem(QStringLiteral("视频"), 2);
     m_filterCombo->addItem(QStringLiteral("收藏"), 3);
+    m_filterCombo->addItem(QStringLiteral("在线下载"), 4); // V4.7
+    m_resolutionCombo = new QComboBox(filterRow);          // V4.7：按分辨率 / 朝向分组
+    m_resolutionCombo->addItem(QStringLiteral("任意尺寸"), 0);
+    m_resolutionCombo->addItem(QStringLiteral("横向"), 1);
+    m_resolutionCombo->addItem(QStringLiteral("纵向"), 2);
+    m_resolutionCombo->addItem(QStringLiteral("方形"), 3);
+    m_resolutionCombo->addItem(QStringLiteral("≥ 4K"), 10);
+    m_resolutionCombo->addItem(QStringLiteral("≥ 2K"), 11);
+    m_resolutionCombo->addItem(QStringLiteral("1080p"), 12);
+    m_resolutionCombo->addItem(QStringLiteral("720p"), 13);
+    m_resolutionCombo->addItem(QStringLiteral("低于 720p"), 14);
+    m_resolutionCombo->setToolTip(QStringLiteral(
+        "按画面朝向或分辨率档筛选。只读文件头取尺寸，不解码整张图，几百项的库也是秒出。"));
     m_sortCombo = new QComboBox(filterRow);
     m_sortCombo->addItem(QStringLiteral("按添加时间"), 0);
     m_sortCombo->addItem(QStringLiteral("按名称"), 1);
     m_sortCombo->addItem(QStringLiteral("按类型"), 2);
+    m_sortCombo->addItem(QStringLiteral("按分辨率"), 3); // V4.7
     connect(m_searchEdit, &QLineEdit::textChanged, this, &MainWindow::onSearchChanged);
     connect(m_filterCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &MainWindow::onFilterChanged);
+    connect(m_resolutionCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &MainWindow::onResolutionFilterChanged);
     connect(m_sortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &MainWindow::onSortChanged);
     filterLayout->addWidget(m_searchEdit, 1);
     filterLayout->addWidget(m_filterCombo);
+    filterLayout->addWidget(m_resolutionCombo);
     filterLayout->addWidget(m_sortCombo);
     layout->addWidget(filterRow);
+
+    // ---- 场景预设（V4.7：一键把整套桌面状态切过去）----
+    auto* presetRow = new QWidget(pane);
+    auto* presetLayout = new QHBoxLayout(presetRow);
+    presetLayout->setContentsMargins(0, 0, 0, 0);
+    presetLayout->setSpacing(8);
+    auto* presetLabel = new QLabel(QStringLiteral("场景预设"), presetRow);
+    m_presetCombo = new QComboBox(presetRow);
+    m_presetCombo->setToolTip(QStringLiteral(
+        "把壁纸、画面效果、挂件、切换策略打包成一个命名场景。存在数据目录的 presets.json 里，"
+        "可手动编辑或随配置一起拷走。"));
+    m_presetCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_presetCombo->setMinimumWidth(180);
+    auto* applyPresetBtn = new QPushButton(QStringLiteral("应用"), presetRow);
+    applyPresetBtn->setObjectName(QStringLiteral("primary"));
+    applyPresetBtn->setToolTip(QStringLiteral("立即把选中预设套用到桌面"));
+    m_presetSaveBtn = new QPushButton(QStringLiteral("保存当前为预设"), presetRow);
+    m_presetSaveBtn->setToolTip(QStringLiteral("把当前所有设置存成一个新预设（同名则覆盖）"));
+    m_presetDeleteBtn = new QPushButton(QStringLiteral("删除"), presetRow);
+    m_presetDeleteBtn->setObjectName(QStringLiteral("danger"));
+    connect(applyPresetBtn, &QPushButton::clicked, this, &MainWindow::onPresetApply);
+    connect(m_presetSaveBtn, &QPushButton::clicked, this, &MainWindow::onPresetSave);
+    connect(m_presetDeleteBtn, &QPushButton::clicked, this, &MainWindow::onPresetDelete);
+    presetLayout->addWidget(presetLabel);
+    presetLayout->addWidget(m_presetCombo);
+    presetLayout->addWidget(applyPresetBtn);
+    presetLayout->addWidget(m_presetSaveBtn);
+    presetLayout->addWidget(m_presetDeleteBtn);
+    presetLayout->addStretch(1);
+    layout->addWidget(presetRow);
+
+    // ---- 在线图源（V4.7：不用先存到本地再添加）----
+    auto* onlineRow = new QWidget(pane);
+    auto* onlineLayout = new QHBoxLayout(onlineRow);
+    onlineLayout->setContentsMargins(0, 0, 0, 0);
+    onlineLayout->setSpacing(8);
+    auto* onlineLabel = new QLabel(QStringLiteral("在线添加"), onlineRow);
+    m_urlEdit = new QLineEdit(onlineRow);
+    m_urlEdit->setPlaceholderText(QStringLiteral("粘贴图片网址，回车下载到壁纸库…"));
+    m_urlEdit->setClearButtonEnabled(true);
+    m_urlImportBtn = new QPushButton(QStringLiteral("下载"), onlineRow);
+    m_bingBtn = new QPushButton(QStringLiteral("Bing 今日一图"), onlineRow);
+    m_bingBtn->setToolTip(QStringLiteral("抓取 Bing 首页当日壁纸原图并加入壁纸库"));
+    connect(m_urlEdit, &QLineEdit::returnPressed, this, &MainWindow::onUrlImport);
+    connect(m_urlImportBtn, &QPushButton::clicked, this, &MainWindow::onUrlImport);
+    connect(m_bingBtn, &QPushButton::clicked, this, &MainWindow::onBingDaily);
+    onlineLayout->addWidget(onlineLabel);
+    onlineLayout->addWidget(m_urlEdit, 1);
+    onlineLayout->addWidget(m_urlImportBtn);
+    onlineLayout->addWidget(m_bingBtn);
+    layout->addWidget(onlineRow);
 
     // ---- 壁纸库操作（V4.6：库管理 + 播放控制全部放到壁纸库页）----
     auto* toolRow = new QWidget(pane);
@@ -753,6 +896,10 @@ QWidget* MainWindow::buildSettingsPage()
     m_volumeSlider = new QSlider(Qt::Horizontal, videoBox);
     m_volumeSlider->setRange(0, 100);
     m_volumeSlider->setValue(0);
+    m_volumeSlider->setToolTip(QStringLiteral(
+        "0 = 完全不走音频链路（最省）；调到 0 以上会建立音频输出，"
+        "视频的声音随之进入系统混音——桌面频谱也正是从这里取信号。\n"
+        "音量交给系统音量控制，实际响度取决于系统当前音量。"));
     connect(m_volumeSlider, &QSlider::valueChanged, this,
             [this](int v) { m_engine.setVideoVolume(v); });
     videoForm->addRow(QStringLiteral("音量"), m_volumeSlider);
@@ -944,7 +1091,8 @@ QWidget* MainWindow::buildSettingsPage()
     auto* audioForm = new QFormLayout(audioBox);
     m_spectrumEnabled = new QCheckBox(QStringLiteral("在桌面显示频谱"), audioBox);
     m_spectrumEnabled->setToolTip(QStringLiteral(
-        "采集系统输出声音（WASAPI 回环）画成频谱条，贴在屏幕底边。不播放声音时自动归零。"));
+        "采集系统输出声音（WASAPI 回环）画成频谱条，贴在屏幕底边。不播放声音时自动归零。\n"
+        "想让它对视频壁纸有反应，把设置 →「视频 → 音量」调到 0 以上即可。"));
     m_spectrumBands = new QSpinBox(audioBox);
     m_spectrumBands->setRange(16, 128);
     m_spectrumBands->setValue(48);
@@ -955,6 +1103,27 @@ QWidget* MainWindow::buildSettingsPage()
     audioForm->addRow(QString(), m_spectrumEnabled);
     audioForm->addRow(QStringLiteral("频谱条数"), m_spectrumBands);
     layout->addWidget(audioBox);
+
+    // ---- 场景预设（V4.7）----
+    // 设置页放一份镜像：用户调完效果想存成预设时，不用先跳回壁纸库页。
+    auto* presetBox = new QGroupBox(QStringLiteral("场景预设"), pane);
+    auto* presetForm = new QFormLayout(presetBox);
+    m_monitorPresetCombo = new QComboBox(presetBox);
+    m_monitorPresetCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    auto* presetApplyBtn = new QPushButton(QStringLiteral("应用这个预设"), presetBox);
+    presetApplyBtn->setObjectName(QStringLiteral("primary"));
+    connect(presetApplyBtn, &QPushButton::clicked, this, &MainWindow::onPresetApply);
+    auto* presetNote = new QLabel(QStringLiteral(
+                                      "预设把壁纸、填充方式、画面效果、挂件、自动切换策略一起记下来，"
+                                      "一键切换整套桌面状态。\n"
+                                      "两个下拉是同一个列表：这里选中的项会同步到壁纸库页。"),
+                                  presetBox);
+    presetNote->setObjectName(QStringLiteral("emptySub"));
+    presetNote->setWordWrap(true);
+    presetForm->addRow(QStringLiteral("选择预设"), m_monitorPresetCombo);
+    presetForm->addRow(QString(), presetApplyBtn);
+    presetForm->addRow(QString(), presetNote);
+    layout->addWidget(presetBox);
 
     // ---- 省电 ----
     auto* powerBox = new QGroupBox(QStringLiteral("省电"), pane);
@@ -1272,6 +1441,9 @@ void MainWindow::loadSettings()
         item.type = (s.value(QStringLiteral("type"), 0).toInt() == 1) ? MediaItem::Type::Video
                                                                       : MediaItem::Type::Image;
         item.path = s.value(QStringLiteral("path")).toString();
+        item.favorite = s.value(QStringLiteral("favorite"), false).toBool();
+        item.added = s.value(QStringLiteral("added"), 0).toLongLong();
+        item.online = s.value(QStringLiteral("online"), false).toBool();
         if (QFileInfo::exists(item.path)) {
             m_items.append(item);
         }
@@ -1324,11 +1496,19 @@ void MainWindow::loadSettings()
             qBound(0, s.value(QStringLiteral("switchScope"), 0).toInt(), 3));
     }
     if (m_filterCombo) {
-        m_filterCombo->setCurrentIndex(qBound(0, s.value(QStringLiteral("filter"), 0).toInt(), 3));
+        m_filterCombo->setCurrentIndex(qBound(0, s.value(QStringLiteral("filter"), 0).toInt(), 4));
     }
     if (m_sortCombo) {
-        m_sortCombo->setCurrentIndex(qBound(0, s.value(QStringLiteral("sortBy"), 0).toInt(), 2));
+        m_sortCombo->setCurrentIndex(qBound(0, s.value(QStringLiteral("sortBy"), 0).toInt(), 3));
     }
+    if (m_resolutionCombo) {
+        // 档位码不是连续的（0,1,2,3,10..14），按数据值回查而非按下标
+        const int wanted = s.value(QStringLiteral("sizeFilter"), 0).toInt();
+        const int index = m_resolutionCombo->findData(wanted);
+        m_resolutionCombo->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    // ---- V4.7：播放历史（不重复随机跨会话续用）----
+    loadHistory();
     if (m_fxBrightness) {
         m_fxBrightness->setValue(qBound(-100, s.value(QStringLiteral("fxBrightness"), 0).toInt(), 100));
     }
@@ -1405,6 +1585,8 @@ void MainWindow::loadSettings()
 
     // 多屏行要在库加载完之后重建：下拉里列的是库里的图片
     refreshMonitorRows();
+    // 预设要在库加载完之后重建：预设名与库内容无关，但应用预设时会用到库
+    refreshPresetCombos();
 
     m_fitCombo->blockSignals(false);
     m_screenCombo->blockSignals(false);
@@ -1456,6 +1638,7 @@ void MainWindow::saveSettings()
         s.setValue(QStringLiteral("path"), m_items[i].path);
         s.setValue(QStringLiteral("favorite"), m_items[i].favorite);
         s.setValue(QStringLiteral("added"), m_items[i].added);
+        s.setValue(QStringLiteral("online"), m_items[i].online);
     }
     s.endArray();
 
@@ -1493,6 +1676,9 @@ void MainWindow::saveSettings()
     }
     if (m_sortCombo) {
         s.setValue(QStringLiteral("sortBy"), m_sortCombo->currentIndex());
+    }
+    if (m_resolutionCombo) {
+        s.setValue(QStringLiteral("sizeFilter"), m_resolutionCombo->currentData().toInt());
     }
     // ---- V4.6：画面效果 ----
     const ImageEffect fx = collectEffect();
@@ -1541,8 +1727,15 @@ void MainWindow::saveSettings()
 void MainWindow::rebuildVisible()
 {
     m_visible.clear();
+    m_visibleOrientation.clear();
+    m_visibleResolution.clear();
     const QString keyword = m_searchEdit ? m_searchEdit->text().trimmed() : QString();
     const int filter = m_filterCombo ? m_filterCombo->currentData().toInt() : 0;
+    // 分辨率/朝向筛选用一个下拉复用：< 10 是朝向码，>= 10 是档位码
+    const int sizeFilter = m_resolutionCombo ? m_resolutionCombo->currentData().toInt() : 0;
+    const bool needProbe = (sizeFilter != 0);
+    const bool needSortProbe = m_sortCombo && m_sortCombo->currentData().toInt() == 3;
+
     for (int i = 0; i < m_items.size(); ++i) {
         const MediaItem& item = m_items.at(i);
         const bool video = (item.type == MediaItem::Type::Video);
@@ -1555,11 +1748,46 @@ void MainWindow::rebuildVisible()
         if (filter == 3 && !item.favorite) {
             continue;
         }
+        if (filter == 4 && !item.online) { // V4.7：只挑在线下载来的
+            continue;
+        }
         if (!keyword.isEmpty()
             && !QFileInfo(item.path).fileName().contains(keyword, Qt::CaseInsensitive)) {
             continue;
         }
+
+        // 尺寸信息只在真的用到时才探测（筛选或按分辨率排序），
+        // 否则一个普通浏览操作会平白读几百个文件头。
+        MediaInfo info;
+        int orientation = static_cast<int>(Orientation::Landscape);
+        int tier = static_cast<int>(ResolutionTier::Unknown);
+        if (needProbe || needSortProbe) {
+            info = MediaInfoProbe::probe(item.path);
+            orientation = static_cast<int>(MediaInfoProbe::orientationOf(info));
+            tier = static_cast<int>(MediaInfoProbe::tierOf(info));
+        }
+
+        if (needProbe) {
+            if (sizeFilter >= 10) {
+                // 档位筛选是「恰好这一档」还是「不低于」？用「不低于」更实用：
+                // 想找 2K 以上的大图，选 ≥ 2K 就该把 4K 也算进来。
+                const int wantedTier = sizeFilter - 10; // 0..4 对应 SD..UHD
+                if (static_cast<int>(ResolutionTier::Unknown) == tier || tier < wantedTier) {
+                    continue;
+                }
+            } else if (orientation != sizeFilter - 1) {
+                continue;
+            }
+        }
+
         m_visible.append(i);
+        if (needProbe || needSortProbe) {
+            m_visibleOrientation.append(QString::number(orientation));
+            m_visibleResolution.append(tier);
+        } else {
+            m_visibleOrientation.append(QString());
+            m_visibleResolution.append(-1);
+        }
     }
 
     const int sort = m_sortCombo ? m_sortCombo->currentData().toInt() : 0;
@@ -1577,8 +1805,25 @@ void MainWindow::rebuildVisible()
             }
             return ia.added < ib.added;
         }
+        if (sort == 3) {
+            // 分辨率降序：大图在前，尺寸未知的沉底
+            const MediaInfo ma = MediaInfoProbe::probe(ia.path);
+            const MediaInfo mb = MediaInfoProbe::probe(ib.path);
+            const int pixelsA = ma.valid() ? ma.width * ma.height : -1;
+            const int pixelsB = mb.valid() ? mb.width * mb.height : -1;
+            if (pixelsA != pixelsB) {
+                return pixelsA > pixelsB;
+            }
+            return ia.added < ib.added;
+        }
         return ia.added < ib.added;
     });
+}
+
+void MainWindow::onResolutionFilterChanged()
+{
+    refreshList();
+    saveSettings();
 }
 
 void MainWindow::refreshList()
@@ -1599,7 +1844,18 @@ void MainWindow::refreshList()
         rowItem->setData(kRoleType, video ? 1 : 0);
         rowItem->setData(kRolePath, item.path);
         rowItem->setData(kRoleIndex, m_visible.at(row));
-        rowItem->setToolTip(item.path);
+        // 悬停提示带上尺寸与时长类信息，省得为了看一眼分辨率就双击应用
+        QString tip = item.path;
+        const MediaInfo info = MediaInfoProbe::probe(item.path);
+        if (info.valid()) {
+            tip += QStringLiteral("\n%1 × %2  ·  %3  ·  %4")
+                       .arg(info.width)
+                       .arg(info.height)
+                       .arg(MediaInfoProbe::orientationLabel(
+                           MediaInfoProbe::orientationOf(info)),
+                            MediaInfoProbe::tierLabel(MediaInfoProbe::tierOf(info)));
+        }
+        rowItem->setToolTip(tip);
         rowItem->setTextAlignment(Qt::AlignHCenter | Qt::AlignBottom);
         m_list->addItem(rowItem);
     }
@@ -1751,6 +2007,491 @@ void MainWindow::onSwitchModeChanged()
     m_shuffleQueue.clear();
     m_shufflePos = 0;
     saveSettings();
+}
+
+// ---------------------------------------------------------------- V4.7：场景预设
+
+WallpaperPreset MainWindow::collectPreset(const QString& name) const
+{
+    WallpaperPreset preset;
+    preset.name = name;
+
+    // 当前壁纸：优先用「正在生效的那一张」，而不是列表里恰好选中的那张
+    if (m_currentIndex >= 0 && m_currentIndex < m_items.size()) {
+        preset.wallpaperPath = m_items.at(m_currentIndex).path;
+        preset.wallpaperType = m_items.at(m_currentIndex).type == MediaItem::Type::Video ? 1 : 0;
+    } else {
+        QSettings s;
+        preset.wallpaperPath = s.value(QStringLiteral("lastPath")).toString();
+        preset.wallpaperType = s.value(QStringLiteral("lastType"), 0).toInt();
+    }
+
+    preset.fit = m_fitCombo ? m_fitCombo->currentData().toInt() : 0;
+    preset.screenTarget = m_screenCombo ? m_screenCombo->currentData().toInt() : 1;
+    preset.monitorIndex = m_monitorCombo ? m_monitorCombo->currentIndex() : 0;
+    preset.volume = m_volumeSlider ? m_volumeSlider->value() : 0;
+    preset.profile = m_profileCombo ? m_profileCombo->currentData().toInt() : 0;
+
+    preset.effect = collectEffect();
+
+    preset.overlay = collectOverlay();
+    preset.spectrumEnabled = m_spectrumEnabled && m_spectrumEnabled->isChecked();
+    preset.spectrumBands = m_spectrumBands ? m_spectrumBands->value() : 48;
+
+    preset.autoSwitch = m_autoSwitch && m_autoSwitch->isChecked();
+    preset.intervalMinutes = m_intervalSpin ? m_intervalSpin->value() : 30;
+    preset.switchMode = m_switchModeCombo ? m_switchModeCombo->currentData().toInt() : 0;
+    preset.switchScope = m_switchScopeCombo ? m_switchScopeCombo->currentData().toInt() : 0;
+
+    // 逐屏壁纸按「显示器设备名」存，而不是按下标——换显示器接线顺序后下标会错位
+    const QList<MonitorInfo> monitors = WallpaperEngine::listMonitors();
+    for (int i = 0; i < monitors.size() && i < m_monitorCombos.size(); ++i) {
+        const QString path = m_monitorCombos.at(i)->currentData().toString();
+        if (!path.isEmpty()) {
+            preset.monitors.append({monitors.at(i).name, path});
+        }
+    }
+    return preset;
+}
+
+void MainWindow::applyPreset(const WallpaperPreset& preset)
+{
+    // 整个套用过程要屏蔽信号 + 禁用回写，否则中途的 setValue 会触发
+    // 一堆 saveSettings 与副作用（比如每调一次效果就重算一次图片）。
+    const bool wasLoading = m_loading;
+    m_loading = true;
+
+    // QSignalBlocker 不可拷贝，所以用 unique_ptr 装进列表统一管理生命周期。
+    // 后面用 clear() 显式释放——必须先解除屏蔽再执行生效动作，否则真正的
+    // applyImage / applyVideo 会被一起挡掉。
+    const QList<QObject*> watched = {m_fitCombo,     m_screenCombo, m_monitorCombo,
+                                     m_profileCombo, m_volumeSlider, m_intervalSpin,
+                                     m_fxBrightness, m_fxContrast, m_fxSaturation,
+                                     m_fxBlur,       m_fxVignette,  m_fxGray,
+                                     m_overlayEnabled, m_overlayClock, m_overlayCalendar,
+                                     m_overlayText,    m_overlayTextEdit, m_overlayPosCombo,
+                                     m_overlayScreenCombo, m_overlaySize,
+                                     m_spectrumEnabled,    m_spectrumBands,
+                                     m_autoSwitch,         m_switchModeCombo,
+                                     m_switchScopeCombo};
+    std::vector<std::unique_ptr<QSignalBlocker>> blockers;
+    blockers.reserve(watched.size());
+    for (QObject* object : watched) {
+        if (object) {
+            blockers.push_back(std::make_unique<QSignalBlocker>(object));
+        }
+    }
+
+    if (m_fitCombo) {
+        const int index = m_fitCombo->findData(preset.fit);
+        m_fitCombo->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    if (m_screenCombo) {
+        const int index = m_screenCombo->findData(preset.screenTarget);
+        m_screenCombo->setCurrentIndex(index >= 0 ? index : 1);
+    }
+    if (m_monitorCombo && preset.monitorIndex < m_monitorCombo->count()) {
+        m_monitorCombo->setCurrentIndex(qMax(0, preset.monitorIndex));
+    }
+    if (m_profileCombo) {
+        const int index = m_profileCombo->findData(preset.profile);
+        m_profileCombo->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    if (m_volumeSlider) {
+        m_volumeSlider->setValue(preset.volume);
+    }
+    if (m_intervalSpin) {
+        m_intervalSpin->setValue(preset.intervalMinutes);
+    }
+
+    if (m_fxBrightness) {
+        m_fxBrightness->setValue(preset.effect.brightness);
+        m_fxContrast->setValue(preset.effect.contrast);
+        m_fxSaturation->setValue(preset.effect.saturation);
+        m_fxBlur->setValue(preset.effect.blur);
+        m_fxVignette->setValue(preset.effect.vignette);
+    }
+    if (m_fxGray) {
+        m_fxGray->setChecked(preset.effect.grayscale);
+    }
+
+    if (m_overlayEnabled) {
+        m_overlayEnabled->setChecked(preset.overlay.enabled);
+        m_overlayClock->setChecked(preset.overlay.showClock);
+        m_overlayCalendar->setChecked(preset.overlay.showCalendar);
+        m_overlayText->setChecked(preset.overlay.showText);
+        m_overlayTextEdit->setText(preset.overlay.text);
+        m_overlayPosCombo->setCurrentIndex(qBound(0, preset.overlay.position, 4));
+        m_overlaySize->setValue(preset.overlay.fontSize);
+        const int screenIndex = m_overlayScreenCombo->findData(preset.overlay.screenIndex);
+        m_overlayScreenCombo->setCurrentIndex(screenIndex >= 0 ? screenIndex : 0);
+    }
+    if (m_spectrumEnabled) {
+        m_spectrumEnabled->setChecked(preset.spectrumEnabled);
+        m_spectrumBands->setValue(preset.spectrumBands);
+    }
+
+    if (m_switchModeCombo) {
+        const int index = m_switchModeCombo->findData(preset.switchMode);
+        m_switchModeCombo->setCurrentIndex(index >= 0 ? index : 0);
+        const int scopeIndex = m_switchScopeCombo->findData(preset.switchScope);
+        m_switchScopeCombo->setCurrentIndex(scopeIndex >= 0 ? scopeIndex : 0);
+    }
+    if (m_autoSwitch) {
+        m_autoSwitch->setChecked(preset.autoSwitch);
+    }
+
+    // 逐屏壁纸：按设备名回填
+    if (!preset.monitors.isEmpty()) {
+        const QList<MonitorInfo> monitors = WallpaperEngine::listMonitors();
+        for (int i = 0; i < monitors.size() && i < m_monitorCombos.size(); ++i) {
+            QString want;
+            for (const auto& pair : preset.monitors) {
+                if (pair.first.compare(monitors.at(i).name, Qt::CaseInsensitive) == 0) {
+                    want = pair.second;
+                    break;
+                }
+            }
+            QComboBox* combo = m_monitorCombos.at(i);
+            const QSignalBlocker blocker(combo);
+            const int index = want.isEmpty() ? 0 : combo->findData(want);
+            combo->setCurrentIndex(index >= 0 ? index : 0);
+        }
+    }
+
+    // 显式释放屏蔽器，让信号先恢复正常，再执行后面的生效动作
+    blockers.clear();
+    m_loading = wasLoading;
+
+    // 换策略后旧洗牌队列作废
+    m_shuffleQueue.clear();
+    m_shufflePos = 0;
+
+    // 同步引擎侧参数，然后应用效果与挂件
+    if (m_screenCombo) {
+        m_engine.setTarget(static_cast<ScreenTarget>(m_screenCombo->currentData().toInt()),
+                           m_monitorCombo ? m_monitorCombo->currentIndex() : 0);
+    }
+    if (m_profileCombo) {
+        m_engine.setPerformanceProfile(
+            static_cast<VlcProfile>(m_profileCombo->currentData().toInt()));
+    }
+    if (m_volumeSlider) {
+        m_engine.setVideoVolume(m_volumeSlider->value());
+    }
+    onOverlayChanged(); // 会按新开关重启/停止频谱并落盘
+    onAutoSwitchToggled(m_autoSwitch && m_autoSwitch->isChecked());
+
+    // 最后才切壁纸：效果、挂件、音量都已就位，一次应用就是最终形态
+    if (!preset.wallpaperPath.isEmpty() && QFileInfo::exists(preset.wallpaperPath)) {
+        MediaItem item;
+        item.path = preset.wallpaperPath;
+        item.type = preset.wallpaperType == 1 ? MediaItem::Type::Video : MediaItem::Type::Image;
+        // 尽量把它选进库里的对应项，这样后续的「下一张」有正确的起点
+        for (int i = 0; i < m_items.size(); ++i) {
+            if (m_items.at(i).path.compare(item.path, Qt::CaseInsensitive) == 0) {
+                m_currentIndex = i;
+                break;
+            }
+        }
+        applyItem(item);
+    } else if (!preset.wallpaperPath.isEmpty()) {
+        updateStatus(QStringLiteral("预设里的壁纸文件已不存在：%1")
+                         .arg(QFileInfo(preset.wallpaperPath).fileName()),
+                     true);
+    }
+
+    // 逐屏壁纸最后生效（它会覆盖主设置）
+    bool hasPerMonitor = false;
+    for (QComboBox* combo : m_monitorCombos) {
+        if (combo && !combo->currentData().toString().isEmpty()) {
+            hasPerMonitor = true;
+            break;
+        }
+    }
+    if (hasPerMonitor) {
+        onMonitorsApply();
+    }
+
+    saveSettings();
+    updateStatus(QStringLiteral("已应用场景预设「%1」").arg(preset.name));
+    Logger::info(QStringLiteral("已应用场景预设：%1").arg(preset.name));
+}
+
+void MainWindow::refreshPresetCombos()
+{
+    m_presets = PresetManager::load();
+    const QList<QComboBox*> combos = {m_presetCombo, m_monitorPresetCombo};
+    for (QComboBox* combo : combos) {
+        if (!combo) {
+            continue;
+        }
+        const QSignalBlocker blocker(combo);
+        const QString previous = combo->currentText();
+        combo->clear();
+        if (m_presets.isEmpty()) {
+            combo->addItem(QStringLiteral("（还没有预设）"));
+            combo->setEnabled(false);
+        } else {
+            combo->setEnabled(true);
+            for (const WallpaperPreset& preset : m_presets) {
+                combo->addItem(preset.name);
+            }
+            const int index = combo->findText(previous);
+            combo->setCurrentIndex(index >= 0 ? index : 0);
+        }
+    }
+    if (m_presetDeleteBtn) {
+        m_presetDeleteBtn->setEnabled(!m_presets.isEmpty());
+    }
+}
+
+void MainWindow::onPresetApply()
+{
+    const int index = m_presetCombo ? m_presetCombo->currentIndex() : -1;
+    if (index < 0 || index >= m_presets.size()) {
+        updateStatus(QStringLiteral("没有可应用的预设，先「保存当前为预设」"), true);
+        return;
+    }
+    applyPreset(m_presets.at(index));
+}
+
+void MainWindow::onPresetSave()
+{
+    bool accepted = false;
+    const QString suggested = m_presetCombo && m_presetCombo->count() > 0
+                                  ? m_presetCombo->currentText()
+                                  : QString();
+    const QString input = QInputDialog::getText(
+        this, QStringLiteral("保存场景预设"),
+        QStringLiteral("给这套设置起个名字（与已有预设同名则覆盖）："), QLineEdit::Normal,
+        suggested.startsWith(QStringLiteral("（")) ? QString() : suggested, &accepted);
+    if (!accepted) {
+        return;
+    }
+
+    QString reason;
+    if (!PresetManager::validateName(input, &reason)) {
+        updateStatus(reason, true);
+        return;
+    }
+
+    WallpaperPreset preset = collectPreset(input.trimmed());
+    QString err;
+    if (!PresetManager::upsert(preset, &err)) {
+        updateStatus(err, true);
+        return;
+    }
+    refreshPresetCombos();
+    const int index = m_presetCombo->findText(preset.name);
+    if (index >= 0) {
+        m_presetCombo->setCurrentIndex(index);
+    }
+    updateStatus(QStringLiteral("已保存场景预设「%1」").arg(preset.name));
+}
+
+void MainWindow::onPresetDelete()
+{
+    const int index = m_presetCombo ? m_presetCombo->currentIndex() : -1;
+    if (index < 0 || index >= m_presets.size()) {
+        return;
+    }
+    const QString name = m_presets.at(index).name;
+    const auto answer = QMessageBox::question(
+        this, QStringLiteral("删除预设"),
+        QStringLiteral("确定要删除场景预设「%1」吗？此操作不可撤销。").arg(name),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    QString err;
+    if (!PresetManager::remove(name, &err)) {
+        updateStatus(err, true);
+        return;
+    }
+    refreshPresetCombos();
+    updateStatus(QStringLiteral("已删除场景预设「%1」").arg(name));
+}
+
+// ---------------------------------------------------------------- V4.7：在线图源
+
+void MainWindow::onUrlImport()
+{
+    if (!m_online || !m_urlEdit) {
+        return;
+    }
+    const QString url = m_urlEdit->text().trimmed();
+    if (url.isEmpty()) {
+        updateStatus(QStringLiteral("先粘贴一个图片网址"), true);
+        return;
+    }
+    if (m_online->busy()) {
+        updateStatus(QStringLiteral("上一批下载还没结束，稍候再试"), true);
+        return;
+    }
+    // 一次可以贴多个地址，换行分隔
+    const QStringList urls = url.split(QRegularExpression(QStringLiteral("[\\s,]+")),
+                                      Qt::SkipEmptyParts);
+    m_urlImportBtn->setEnabled(false);
+    m_bingBtn->setEnabled(false);
+    updateStatus(QStringLiteral("正在下载 %1 张图片…").arg(urls.size()));
+    for (const QString& single : urls) {
+        m_online->downloadImage(single);
+    }
+}
+
+void MainWindow::onBingDaily()
+{
+    if (!m_online) {
+        return;
+    }
+    if (m_online->busy()) {
+        updateStatus(QStringLiteral("上一批下载还没结束，稍候再试"), true);
+        return;
+    }
+    m_urlImportBtn->setEnabled(false);
+    m_bingBtn->setEnabled(false);
+    updateStatus(QStringLiteral("正在获取 Bing 今日一图…"));
+    m_online->downloadBingDaily(0);
+}
+
+void MainWindow::onOnlineImageReady(const QString& localPath)
+{
+    if (localPath.isEmpty() || !QFileInfo::exists(localPath)) {
+        return;
+    }
+    // 已经在库里就不重复加（同一张图两次下载可能落成不同文件名，但同路径要防重）
+    for (const MediaItem& item : m_items) {
+        if (item.path.compare(localPath, Qt::CaseInsensitive) == 0) {
+            updateStatus(QStringLiteral("这张图已经在壁纸库里了"));
+            return;
+        }
+    }
+    MediaItem item;
+    item.type = MediaItem::Type::Image;
+    item.path = QDir::toNativeSeparators(localPath);
+    item.added = QDateTime::currentMSecsSinceEpoch();
+    item.online = true;
+    m_items.append(item);
+    refreshList();
+    saveSettings();
+    updateStatus(QStringLiteral("已加入壁纸库：%1").arg(QFileInfo(localPath).fileName()));
+}
+
+void MainWindow::onOnlineFailed(const QString& reason)
+{
+    updateStatus(reason, true);
+    Logger::warning(QStringLiteral("在线图源失败：%1").arg(reason));
+}
+
+void MainWindow::onOnlineProgress(qint64 received, qint64 total)
+{
+    if (total <= 0) {
+        return;
+    }
+    const int percent = static_cast<int>(received * 100 / total);
+    updateStatus(QStringLiteral("下载中 %1%").arg(percent));
+}
+
+// ---------------------------------------------------------------- V4.7：播放历史
+
+void MainWindow::loadHistory()
+{
+    m_history.clear();
+    QSettings s;
+    const QStringList saved = s.value(QStringLiteral("playHistory")).toStringList();
+    for (const QString& path : saved) {
+        if (!path.isEmpty() && QFileInfo::exists(path)) {
+            m_history.append(path);
+        }
+    }
+    Logger::info(QStringLiteral("已载入播放历史 %1 条").arg(m_history.size()));
+}
+
+void MainWindow::saveHistory()
+{
+    if (m_loading) {
+        return;
+    }
+    QSettings s;
+    s.setValue(QStringLiteral("playHistory"), m_history);
+}
+
+void MainWindow::recordHistory(int itemIndex)
+{
+    if (itemIndex < 0 || itemIndex >= m_items.size()) {
+        return;
+    }
+    const QString path = m_items.at(itemIndex).path;
+    m_history.removeAll(path); // 去重后挪到最前，保证「最近」语义
+    m_history.prepend(path);
+    // 最多留 200 条：够覆盖一个几百项的库的一整轮，又不至于把配置撑大
+    while (m_history.size() > 200) {
+        m_history.removeLast();
+    }
+    saveHistory();
+}
+
+/**
+ * 策略取下一张。
+ *
+ * 与 V4.6 的 onNext() 的区别：这里不碰界面选中态，只返回下标，
+ * 因此自动切换定时器可以复用同一套策略——原先定时器直接走 pickNextIndex()，
+ * 导致「随机不重复」在自动切换下退化成可重复随机（真实缺陷，本次一并修掉）。
+ */
+int MainWindow::nextIndexByPolicy()
+{
+    if (m_items.isEmpty()) {
+        return -1;
+    }
+    const int mode = m_switchModeCombo ? m_switchModeCombo->currentData().toInt() : 0;
+    const int scope = m_switchScopeCombo ? m_switchScopeCombo->currentData().toInt() : 0;
+
+    QList<int> candidates;
+    for (int i = 0; i < m_items.size(); ++i) {
+        const MediaItem& item = m_items.at(i);
+        const bool video = (item.type == MediaItem::Type::Video);
+        if ((scope == 1 && video) || (scope == 2 && !video) || (scope == 3 && !item.favorite)) {
+            continue;
+        }
+        candidates.append(i);
+    }
+    if (candidates.isEmpty()) {
+        return m_currentIndex;
+    }
+
+    if (mode == 0) { // 顺序
+        int next = m_currentIndex;
+        for (int i = 0; i < m_items.size(); ++i) {
+            next = (next + 1) % m_items.size();
+            if (candidates.contains(next)) {
+                return next;
+            }
+        }
+        return candidates.first();
+    }
+    if (mode == 1) { // 随机可重复：真正的独立随机，不看历史
+        return candidates.at(QRandomGenerator::global()->bounded(candidates.size()));
+    }
+
+    // 不重复随机：优先挑「不在播放历史里」的项。
+    // 历史跨会话保留，所以重启程序也不会立刻撞上刚看过的那张。
+    QList<int> fresh;
+    for (int index : candidates) {
+        if (!m_history.contains(m_items.at(index).path)) {
+            fresh.append(index);
+        }
+    }
+    if (fresh.isEmpty()) {
+        // 候选全部看过了：清空历史重新开始这一轮
+        Logger::info(QStringLiteral("播放历史已覆盖全部候选，开始新一轮"));
+        for (int index : candidates) {
+            m_history.removeAll(m_items.at(index).path);
+        }
+        saveHistory();
+        fresh = candidates;
+    }
+    return fresh.at(QRandomGenerator::global()->bounded(fresh.size()));
 }
 
 // ---------------------------------------------------------------- V4.6：定时场景
@@ -2069,6 +2810,15 @@ void MainWindow::applyItem(const MediaItem& item)
     s.setValue(QStringLiteral("lastPath"), item.path);
     s.setValue(QStringLiteral("lastType"), item.type == MediaItem::Type::Video ? 1 : 0);
 
+    // 记入播放历史（「随机不重复」据此避开刚看过的项）。
+    // 这里按路径回查下标：applyItem 的调用方有的是库内项，有的来自定时场景。
+    for (int i = 0; i < m_items.size(); ++i) {
+        if (m_items.at(i).path.compare(item.path, Qt::CaseInsensitive) == 0) {
+            recordHistory(i);
+            break;
+        }
+    }
+
     const QString name = QFileInfo(item.path).fileName();
 
     if (item.type == MediaItem::Type::Image) {
@@ -2085,12 +2835,19 @@ void MainWindow::applyItem(const MediaItem& item)
     }
 
     applyTarget(); // 保证覆盖范围已同步到引擎
+    const int volume = m_volumeSlider->value();
+    // 视频壁纸 + 频谱：只要开了频谱，就不能用「音量 0 = 不走音频链路」的省电路径，
+    // 否则系统回环采不到任何声音，频谱永远是零。此时给一个最小非零音量让音频输出建立起来。
+    const bool spectrumWanted = m_spectrumEnabled && m_spectrumEnabled->isChecked();
+    const int effectiveVolume = (volume <= 0 && spectrumWanted) ? 1 : volume;
+    if (effectiveVolume != volume) {
+        Logger::info(QStringLiteral("频谱已开启：视频以非零音量起播，音频进入系统混音供回环采集"));
+    }
     QString err;
-    if (m_engine.applyVideo(item.path, m_volumeSlider->value(), &err)) {
+    if (m_engine.applyVideo(item.path, effectiveVolume, &err)) {
         applyVideoPaused(false);
         updateFullscreenGuard();
-        Logger::info(QStringLiteral("视频壁纸已应用：%1（volume=%2）")
-                         .arg(item.path).arg(m_volumeSlider->value()));
+        Logger::info(QStringLiteral("视频壁纸已应用：%1（volume=%2）").arg(item.path).arg(effectiveVolume));
         if (err.isEmpty()) {
             updateStatus(QStringLiteral("已应用视频壁纸：%1").arg(name));
         } else {
@@ -2236,6 +2993,11 @@ void MainWindow::onClearAll()
 {
     m_items.clear();
     m_currentIndex = -1;
+    m_history.clear();          // 库都清空了，历史指向的文件没意义
+    m_shuffleQueue.clear();
+    m_shufflePos = 0;
+    MediaInfoProbe::clearCache(); // 顺带释放尺寸探测缓存
+    saveHistory();
     refreshList();
     saveSettings();
 }
@@ -2257,44 +3019,9 @@ void MainWindow::onApplySelected()
 
 int MainWindow::pickNextIndex() const
 {
-    if (m_items.isEmpty()) {
-        return -1;
-    }
-    const int mode = m_switchModeCombo ? m_switchModeCombo->currentData().toInt() : 0;
-    const int scope = m_switchScopeCombo ? m_switchScopeCombo->currentData().toInt() : 0;
-
-    // 先把符合范围的候选挑出来，顺序模式下也就是「过滤后的播放清单」
-    QList<int> candidates;
-    for (int i = 0; i < m_items.size(); ++i) {
-        const MediaItem& item = m_items.at(i);
-        const bool video = (item.type == MediaItem::Type::Video);
-        if ((scope == 1 && video) || (scope == 2 && !video)) {
-            continue;
-        }
-        if (scope == 3 && !item.favorite) {
-            continue;
-        }
-        candidates.append(i);
-    }
-    if (candidates.isEmpty()) {
-        return m_currentIndex; // 范围为空就维持现状，不要静默跳到别的东西上
-    }
-
-    if (mode == 0) { // 顺序
-        int next = m_currentIndex;
-        for (int i = 0; i < m_items.size(); ++i) {
-            next = (next + 1) % m_items.size();
-            if (candidates.contains(next)) {
-                return next;
-            }
-        }
-        return candidates.first();
-    }
-    if (mode == 1) { // 随机（可重复）
-        return candidates.at(QRandomGenerator::global()->bounded(candidates.size()));
-    }
-    // 不重复随机：一轮内不重播，走完再洗一次
-    return candidates.at(QRandomGenerator::global()->bounded(candidates.size()));
+    // 兼容旧调用点：统一的策略实现不修改界面状态，这里做一次浅包装。
+    // const 方法不能改成员，故用 const_cast 取到 nextIndexByPolicy（它会改历史）。
+    return const_cast<MainWindow*>(this)->nextIndexByPolicy();
 }
 
 void MainWindow::onNext()
@@ -2302,35 +3029,9 @@ void MainWindow::onNext()
     if (m_items.isEmpty()) {
         return;
     }
-    const int mode = m_switchModeCombo ? m_switchModeCombo->currentData().toInt() : 0;
-    if (mode == 2) { // 不重复随机：按洗好的队列走
-        const int scope = m_switchScopeCombo ? m_switchScopeCombo->currentData().toInt() : 0;
-        QList<int> candidates;
-        for (int i = 0; i < m_items.size(); ++i) {
-            const MediaItem& item = m_items.at(i);
-            const bool video = (item.type == MediaItem::Type::Video);
-            if ((scope == 1 && video) || (scope == 2 && !video) || (scope == 3 && !item.favorite)) {
-                continue;
-            }
-            candidates.append(i);
-        }
-        if (candidates.isEmpty()) {
-            return;
-        }
-        if (m_shuffleQueue.isEmpty() || m_shufflePos >= m_shuffleQueue.size()) {
-            m_shuffleQueue = candidates;
-            std::shuffle(m_shuffleQueue.begin(), m_shuffleQueue.end(),
-                         *QRandomGenerator::global());
-            m_shufflePos = 0;
-            // 新一轮的第一张不要和当前重复
-            if (m_shuffleQueue.size() > 1 && m_shuffleQueue.first() == m_currentIndex) {
-                m_shuffleQueue.move(0, m_shuffleQueue.size() - 1);
-            }
-        }
-        m_currentIndex = m_shuffleQueue.at(m_shufflePos++);
-    } else {
-        m_currentIndex = pickNextIndex();
-    }
+    // 顺序 / 随机 / 不重复随机三种策略统一走 nextIndexByPolicy()，
+    // 这样自动切换定时器和「下一张」按钮走的是同一套逻辑（此前是两套，行为不一致）。
+    m_currentIndex = nextIndexByPolicy();
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) {
         return;
     }

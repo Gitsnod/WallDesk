@@ -94,6 +94,14 @@ public:
      */
     bool applyImageToMonitor(const QString& path, const QString& monitorId, ImageFit fit,
                              const ImageEffect& fx, QString* err = nullptr);
+    /**
+     * 播放视频壁纸。volume 为 0..100。
+     *
+     * 音量 > 0 时会建立音频链路（VLC 默认音频输出），这样系统的回环采集
+     * （WASAPI loopback）就能拿到视频的声音，频谱可视化随之有反应；
+     * 同时把物理音量交给用户手里的系统音量决定——把 VLC 音量压到 0
+     * 虽然安静，但音频输出也在输出静音，频谱就永远是零。
+     */
     bool applyVideo(const QString& path, int volume, QString* err = nullptr);
 
     /** 视频画面效果：映射到 libVLC 的 adjust 滤镜，播放中也能即时改。 */

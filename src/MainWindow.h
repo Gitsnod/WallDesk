@@ -9,10 +9,13 @@
 #include "AudioSpectrum.h"
 #include "DesktopOverlay.h"
 #include "ImageEffects.h"
+#include "MediaInfo.h"
+#include "PresetManager.h"
 #include "WallpaperEngine.h"
 
 class DesktopWatcher;
 class FullscreenGuard;
+class OnlineSources;
 class ThumbnailLoader;
 class QAction;
 class QCheckBox;
@@ -37,6 +40,7 @@ struct MediaItem {
     QString path;
     bool favorite = false; // 收藏（V4.6）
     qint64 added = 0;      // 加入库的时间戳（毫秒），用于排序
+    bool online = false;   // 来自在线下载（V4.7），用于「在线」筛选
 };
 
 /**
@@ -116,6 +120,17 @@ private slots:
     void onVideoRecovered();
     void onThumbnailReady(const QString& path, const QImage& image);
 
+    // V4.7：场景预设 / 在线图源 / 画面分组 / 视频配频谱
+    void onPresetApply();
+    void onPresetSave();
+    void onPresetDelete();
+    void onUrlImport();
+    void onBingDaily();
+    void onOnlineImageReady(const QString& localPath);
+    void onOnlineFailed(const QString& reason);
+    void onOnlineProgress(qint64 received, qint64 total);
+    void onResolutionFilterChanged();
+
 private:
     void buildUi();
     /** 创建全局 QAction（快捷键）但不显示菜单栏；菜单功能已统一到左侧工具页。 */
@@ -165,6 +180,20 @@ private:
     void openFolder(const QString& path);
     static QIcon appIcon();
 
+    /** 把当前界面上的全部桌面参数收集成一个预设（V4.7）。 */
+    WallpaperPreset collectPreset(const QString& name) const;
+    /** 把预设应用到界面控件并落盘（V4.7）。 */
+    void applyPreset(const WallpaperPreset& preset);
+    /** 各预设下拉框统一重建，并尽量保留当前选中项。 */
+    void refreshPresetCombos();
+    /** 屏幕合成用的最近播放历史（V4.7）：落盘，供「随机不重复」跨会话续用。 */
+    void loadHistory();
+    void saveHistory();
+    /** 记录一次「已经播过」，并把历史裁剪到上限。 */
+    void recordHistory(int itemIndex);
+    /** 定时场景/自动切换与手动「下一张」共用的取下一张逻辑。 */
+    int nextIndexByPolicy();
+
     QList<MediaItem> m_items;
     int m_currentIndex = -1;
 
@@ -201,6 +230,28 @@ private:
     QList<int> m_visible;       // 行号 → m_items 下标（过滤 / 排序后的映射）
     QList<int> m_shuffleQueue;  // 不重复随机的播放队列
     int m_shufflePos = 0;
+
+    // ---- V4.7 新增：场景预设 ----
+    QComboBox* m_presetCombo = nullptr;
+    QComboBox* m_monitorPresetCombo = nullptr;
+    QPushButton* m_presetSaveBtn = nullptr;
+    QPushButton* m_presetDeleteBtn = nullptr;
+    // 名字 → 预设。用列表而非哈希，保住用户在文件里定义的顺序。
+    QList<WallpaperPreset> m_presets;
+
+    // ---- V4.7 新增：在线图源 ----
+    OnlineSources* m_online = nullptr;
+    QLineEdit* m_urlEdit = nullptr;
+    QPushButton* m_urlImportBtn = nullptr;
+    QPushButton* m_bingBtn = nullptr;
+
+    // ---- V4.7 新增：按分辨率 / 朝向分组 ----
+    QComboBox* m_resolutionCombo = nullptr;
+    QList<QString> m_visibleOrientation; // 与 m_visible 平行的朝向缓存，避免每帧重探测
+    QList<int> m_visibleResolution;      // 同上，存 ResolutionTier 的整型值
+
+    // ---- V4.7 新增：播放历史（不重复随机跨会话续用）----
+    QList<QString> m_history; // 最近播放过的文件路径，最新的排在首位
 
     // ---- V4.6 新增：切换策略 ----
     QComboBox* m_switchModeCombo = nullptr;
@@ -252,6 +303,7 @@ private:
     QTimer* m_thumbTimer = nullptr;   // 可见区域缩略图补加载（防抖）
     QSystemTrayIcon* m_tray = nullptr;
     QMenu* m_trayMenu = nullptr;
+    QMenu* m_trayPresetMenu = nullptr; // V4.7：托盘里的场景预设子菜单
     DesktopWatcher* m_watcher = nullptr;
     /** 加载配置期间禁止回写：加载过程中会触发各种 setChecked/setValue，
      *  此时尚未加载的控件仍是默认值，一旦被 saveSettings 写回就会永久覆盖真实配置。 */

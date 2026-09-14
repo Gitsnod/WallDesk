@@ -66,8 +66,15 @@ public:
     void setProfile(VlcProfile profile);
     VlcProfile profile() const { return m_profile; }
 
-    /** 在指定窗口句柄上播放媒体文件。hwnd 为宿主窗口（HWND）。 */
-    bool play(const QString& file, void* hwnd, int volume, bool loop);
+    /**
+     * 在指定窗口句柄上播放媒体文件。hwnd 为宿主窗口（HWND）。
+     *
+     * muteOutput 为 true 时在 media 上加 :no-audio——整个音频链路不被创建。
+     * 这与「音量设成 0」不是一回事：后者仍然解码音频，只是最后衰减到静音，
+     * 白白多占一份音频解码开销。壁纸场景默认就是静音的，用 :no-audio 更省。
+     * 需要出声（或要把音频喂给频谱）时传 false，再按 volume 控制。
+     */
+    bool play(const QString& file, void* hwnd, int volume, bool loop, bool muteOutput = false);
     /**
      * 画面效果：映射到 libVLC 的 adjust 滤镜（亮度 / 对比度 / 饱和度）。
      * 播放中调用即时生效；未播放时保存下来，下次起播自动套用。

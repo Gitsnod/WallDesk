@@ -651,7 +651,10 @@ bool WallpaperEngine::applyVideo(const QString& path, int volume, QString* err)
     m_stopRequested = false;
     waitAsync(1500); // 后台任务若仍在跑，等它收尾（同一播放器不能并发操作）
 
-    if (!m_vlc.play(path, reinterpret_cast<void*>(m_hostWnd), volume, true)) {
+    // 音量 > 0 才建立音频链路：这样系统回环采集能拿到视频声音，
+    // 频谱可视化就有反应。音量交给用户手里的系统音量决定，不在这里衰减。
+    const bool muteOutput = (volume <= 0);
+    if (!m_vlc.play(path, reinterpret_cast<void*>(m_hostWnd), volume, true, muteOutput)) {
         if (err) {
             *err = QStringLiteral("libVLC 无法播放该文件（编码可能不受支持）：%1").arg(path);
         }
@@ -775,6 +778,9 @@ void WallpaperEngine::setVideoVolume(int volume)
 {
     m_volume = volume;
     m_vlc.setVolume(volume);
+    // 注意：这里只影响「已经建立了音频链路」的播放。从 0 调到非 0 时
+    // 音频输出并未创建（起播时加了 :no-audio），要真正出声需重新播放媒体。
+    // 界面上的音量滑块从 0 拉起来时会走 applyItem 重新应用，因此无需在此重建。
 }
 
 bool WallpaperEngine::snapshotVideo(const QString& file, const QString& outPng, int width, int height)
@@ -892,7 +898,7 @@ void WallpaperEngine::recoverPlayback(bool full)
     if (!runAsync([this, file, hwnd, volume, full, epoch] {
             bool ok = m_vlc.restart(); // 轻量：stop + play，不重建 media
             if (!ok || full) {
-                ok = m_vlc.play(file, reinterpret_cast<void*>(hwnd), volume, true);
+                ok = m_vlc.play(file, reinterpret_cast<void*>(hwnd), volume, true, volume <= 0);
             }
             if (!ok) {
                 QMetaObject::invokeMethod(this, [this] {
