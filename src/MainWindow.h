@@ -204,6 +204,10 @@ private:
     QListWidget* m_list = nullptr;
     QListWidget* m_nav = nullptr;
     QStackedWidget* m_pages = nullptr;
+    // V4.8：设置页的二级导航，以及「每个子页包含哪些分组框」的对应表
+    // （下标与 m_settingsNav 的行号一一对应）。
+    QListWidget* m_settingsNav = nullptr;
+    QList<QList<QWidget*>> m_settingsPages;
     QComboBox* m_fitCombo = nullptr;
     QComboBox* m_screenCombo = nullptr;
     QComboBox* m_monitorCombo = nullptr;
@@ -232,18 +236,16 @@ private:
     int m_shufflePos = 0;
 
     // ---- V4.7 新增：场景预设 ----
+    // 壁纸库页操作行一个、设置页「场景」子页一个，两者互为镜像且双向同步。
+    // V4.8 起「保存为预设 / 删除预设」收进壁纸库页的「更多」菜单，不再单占按钮。
     QComboBox* m_presetCombo = nullptr;
     QComboBox* m_monitorPresetCombo = nullptr;
-    QPushButton* m_presetSaveBtn = nullptr;
-    QPushButton* m_presetDeleteBtn = nullptr;
     // 名字 → 预设。用列表而非哈希，保住用户在文件里定义的顺序。
     QList<WallpaperPreset> m_presets;
 
     // ---- V4.7 新增：在线图源 ----
+    // V4.8：不再单占一行工具条，改由壁纸库页「更多」菜单触发，网址用弹窗输入。
     OnlineSources* m_online = nullptr;
-    QLineEdit* m_urlEdit = nullptr;
-    QPushButton* m_urlImportBtn = nullptr;
-    QPushButton* m_bingBtn = nullptr;
 
     // ---- V4.7 新增：按分辨率 / 朝向分组 ----
     QComboBox* m_resolutionCombo = nullptr;
@@ -296,8 +298,8 @@ private:
     QStackedWidget* m_galleryStack = nullptr;
     QProgressBar* m_busy = nullptr;
     QPushButton* m_pauseButton = nullptr;
-    QPushButton* m_applyButton = nullptr; // 顶部贯穿工具条
-    QPushButton* m_nextButton = nullptr;  // 顶部贯穿工具条
+    QPushButton* m_applyButton = nullptr; // 壁纸库页操作行
+    QPushButton* m_nextButton = nullptr;  // 壁纸库页操作行
 
     QTimer* m_timer = nullptr;        // 自动切换
     QTimer* m_thumbTimer = nullptr;   // 可见区域缩略图补加载（防抖）

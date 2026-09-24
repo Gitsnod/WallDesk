@@ -5,6 +5,7 @@
 
 #include <QCryptographicHash>
 #include <QCoreApplication>
+#include <QDate>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -45,6 +46,65 @@ QString suffixFromContentType(const QString& contentType)
         return QStringLiteral("gif");
     }
     return {};
+}
+
+/**
+ * 拼文件名用的净化：只留 ASCII 字母数字与 - _，其余一律压成下划线。
+ * 中文与空格在文件名里能存但不好认也不好搜，且跨系统传输容易出问题。
+ */
+QString sanitizeNamePart(const QString& raw)
+{
+    QString out;
+    out.reserve(raw.size());
+    for (const QChar& ch : raw) {
+        const bool ascii = ch.unicode() < 128;
+        if (ascii && ch.isLetterOrNumber()) {
+            out.append(ch);
+        } else if (ch == QLatin1Char('-') || ch == QLatin1Char('_')) {
+            out.append(ch);
+        } else {
+            out.append(QLatin1Char('_'));
+        }
+    }
+    out.replace(QRegularExpression(QStringLiteral("_+")), QStringLiteral("_"));
+    while (out.startsWith(QLatin1Char('_'))) {
+        out.remove(0, 1);
+    }
+    while (out.endsWith(QLatin1Char('_'))) {
+        out.chop(1);
+    }
+    return out;
+}
+
+/** 域名 → 文件名片段（去掉 www.，点换成下划线）。 */
+QString hostPart(const QUrl& url)
+{
+    QString host = url.host().toLower();
+    if (host.startsWith(QStringLiteral("www."))) {
+        host.remove(0, 4);
+    }
+    return sanitizeNamePart(host);
+}
+
+/**
+ * Bing 每日一图的文件名主干：bing_<日期>_<图片名>。
+ *
+ * 日期取接口返回的 startdate（不是本机当天）——index 可以往前取历史几天，
+ * 用本机日期会把历史图错标成今天。图片名从地址里的 id 抠：
+ * /th?id=OHR.ElGolfo_ZH-CN8329995759_UHD.jpg → ElGolfo。
+ */
+QString bingLabel(const QJsonObject& entry, const QString& imageUrl)
+{
+    QString date = entry.value(QStringLiteral("startdate")).toString();
+    const QDate parsed = QDate::fromString(date, QStringLiteral("yyyyMMdd"));
+    date = parsed.isValid() ? parsed.toString(QStringLiteral("yyyy-MM-dd"))
+                            : QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"));
+
+    const QRegularExpression re(QStringLiteral("OHR\\.([A-Za-z0-9]+)_"));
+    const QRegularExpressionMatch match = re.match(imageUrl);
+    const QString slug = match.hasMatch() ? match.captured(1) : QString();
+    return slug.isEmpty() ? QStringLiteral("bing_%1").arg(date)
+                          : QStringLiteral("bing_%1_%2").arg(date, slug);
 }
 
 } // namespace
@@ -97,37 +157,76 @@ bool OnlineSources::isAcceptableUrl(const QUrl& url, QString* reason)
     return true;
 }
 
-QString OnlineSources::fileNameFor(const QString& url, const QString& contentType)
+QString OnlineSources::fileNameFor(const QString& url, const QString& contentType,
+                                   const QString& label)
 {
     const QUrl parsed(url);
-    QString name = QFileInfo(parsed.path()).fileName();
 
-    // 路径里没有可用文件名（或以查询串为主）时，用 URL 哈希兜底
     auto looksLikeImage = [](const QString& candidate) {
         const QString suffix = QFileInfo(candidate).suffix().toLower();
         return !suffix.isEmpty() && kImageSuffixes.contains(suffix);
     };
-    if (name.isEmpty() || !looksLikeImage(name)) {
-        const QString hash = QString::fromLatin1(
-            QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Md5).toHex().left(16));
-        QString suffix = QFileInfo(name).suffix().toLower();
-        if (!kImageSuffixes.contains(suffix)) {
-            suffix = suffixFromContentType(contentType);
+
+    // ---- 文件名主干 ----
+    QString stem;
+    if (!label.isEmpty()) {
+        // 调用方直接给了主干（Bing 每日一图）——最可读，优先用
+        stem = sanitizeNamePart(label);
+    }
+    if (stem.isEmpty()) {
+        // 「域名_原文件名」：既认得出是哪张图，也认得出从哪来
+        const QString host = hostPart(parsed);
+        const QString base = QFileInfo(parsed.path()).fileName();
+        if (looksLikeImage(base)) {
+            const QString readable = sanitizeNamePart(QFileInfo(base).completeBaseName());
+            stem = readable.isEmpty() ? host : QStringLiteral("%1_%2").arg(host, readable);
         }
-        if (suffix.isEmpty()) {
-            suffix = QStringLiteral("jpg");
+        if (stem.isEmpty()) {
+            // 路径里没有可读文件名（Bing 的 /th?id=... 正是这种）——退到短哈希
+            const QString hash = QString::fromLatin1(
+                QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Md5).toHex().left(8));
+            stem = host.isEmpty() ? QStringLiteral("wall_%1").arg(hash)
+                                  : QStringLiteral("%1_%2").arg(host, hash);
         }
-        name = QStringLiteral("wall_%1.%2").arg(hash, suffix);
     }
 
-    // 去掉可能混进来的路径分隔符，只保留纯文件名
-    name = QFileInfo(name).fileName();
-    // 文件名过长会让某些文件系统报错，截断但保留扩展名
-    if (name.size() > 120) {
-        const QString suffix = QFileInfo(name).suffix();
-        name = name.left(100) + QStringLiteral(".") + suffix;
+    // ---- 扩展名：优先信 URL 后缀，其次信响应头 ----
+    QString suffix = QFileInfo(parsed.path()).suffix().toLower();
+    if (!kImageSuffixes.contains(suffix)) {
+        suffix = suffixFromContentType(contentType);
     }
-    return name;
+    if (suffix.isEmpty()) {
+        suffix = QStringLiteral("jpg");
+    }
+
+    // 文件名过长会让某些文件系统报错，截断但保留扩展名
+    const int maxStem = 120 - (suffix.size() + 1);
+    if (maxStem > 0 && stem.size() > maxStem) {
+        stem = stem.left(maxStem);
+    }
+    return stem + QLatin1Char('.') + suffix;
+}
+
+QString OnlineSources::findDuplicateByContent(const QString& dir, const QByteArray& payload)
+{
+    const QByteArray wanted = QCryptographicHash::hash(payload, QCryptographicHash::Sha256);
+    const QFileInfoList entries =
+        QDir(dir).entryInfoList(QDir::Files | QDir::Readable, QDir::Name);
+    for (const QFileInfo& info : entries) {
+        // 先按文件大小筛掉绝大多数候选，只对「大小完全相同」的极少数文件算摘要。
+        // 否则每下完一张图都要把整个 downloads 目录读一遍，库大了就变成拖累。
+        if (info.size() != payload.size()) {
+            continue;
+        }
+        QFile file(info.absoluteFilePath());
+        if (!file.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        if (QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256) == wanted) {
+            return info.absoluteFilePath();
+        }
+    }
+    return {};
 }
 
 void OnlineSources::beginRequest()
@@ -151,7 +250,7 @@ void OnlineSources::endRequest()
 }
 
 QString OnlineSources::storePayload(const QByteArray& payload, const QString& url,
-                                    const QString& contentType, QString* err)
+                                    const QString& contentType, const QString& label, QString* err)
 {
     if (payload.isEmpty()) {
         if (err) {
@@ -168,10 +267,21 @@ QString OnlineSources::storePayload(const QByteArray& payload, const QString& ur
         return {};
     }
 
-    QString name = fileNameFor(url, contentType);
+    // 内容去重：同一张图再下一次时复用它，而不是再堆一个副本。
+    // 触发场景很常见——同一天点两回「Bing 每日一图」，或同一个地址换个
+    // 查询串再贴一遍。此前只做「同名不覆盖」，于是每次点击都多一个 _1 文件，
+    // 库里也跟着多一条一模一样的条目。
+    const QString existing = findDuplicateByContent(dir, payload);
+    if (!existing.isEmpty()) {
+        Logger::info(QStringLiteral("下载内容与已有文件相同，直接复用：%1")
+                         .arg(QDir::toNativeSeparators(existing)));
+        return QDir::toNativeSeparators(existing);
+    }
+
+    const QString name = fileNameFor(url, contentType, label);
     QString target = QDir(dir).filePath(name);
 
-    // 同名不覆盖：追加序号，避免把用户之前下的图冲掉
+    // 到这里说明是「同名但内容不同」，才追加序号，避免把之前下的图冲掉
     if (QFileInfo::exists(target)) {
         const QString base = QFileInfo(name).completeBaseName();
         const QString suffix = QFileInfo(name).suffix();
@@ -203,6 +313,11 @@ QString OnlineSources::storePayload(const QByteArray& payload, const QString& ur
 
 void OnlineSources::downloadImage(const QString& url)
 {
+    requestImage(url, QString());
+}
+
+void OnlineSources::requestImage(const QString& url, const QString& label)
+{
     QString reason;
     const QUrl parsed(url.trimmed());
     if (!isAcceptableUrl(parsed, &reason)) {
@@ -220,6 +335,8 @@ void OnlineSources::downloadImage(const QString& url)
     request.setTransferTimeout(timeoutMs());
 
     QNetworkReply* reply = m_net->get(request);
+    // 文件名主干要一路带到落盘那一步（Bing 传的是 bing_日期_图片名）
+    reply->setProperty("nameLabel", label);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         onImageReplyFinished(reply);
     });
@@ -285,9 +402,23 @@ void OnlineSources::onBingMetaFinished(QNetworkReply* reply)
     const QUrl imageUrl(QStringLiteral("https://www.bing.com") + relative);
     Logger::info(QStringLiteral("Bing 每日一图：%1").arg(imageUrl.toString()));
 
+    // Bing 的地址里带着图 id，同一张图的文件名可以提前算出来。已经下过就直接
+    // 复用——连这次流量一起省掉（此前是老老实实把 3.7 MB 再拉一遍，再存成
+    // 一个 _1 副本，同一天点两次就是两份）。
+    const QString label = bingLabel(entry, imageUrl.toString());
+    const QString precomputed =
+        QDir(downloadDir()).filePath(fileNameFor(imageUrl.toString(), QString(), label));
+    if (QFileInfo::exists(precomputed)) {
+        Logger::info(QStringLiteral("Bing 每日一图已存在，直接复用：%1")
+                         .arg(QDir::toNativeSeparators(precomputed)));
+        emit imageReady(QDir::toNativeSeparators(precomputed));
+        endRequest();
+        return;
+    }
+
     // 元信息请求结束，图片请求作为同一批次的一部分继续进行
     endRequest();
-    downloadImage(imageUrl.toString());
+    requestImage(imageUrl.toString(), label);
 }
 
 void OnlineSources::onImageReplyFinished(QNetworkReply* reply)
@@ -328,7 +459,9 @@ void OnlineSources::onImageReplyFinished(QNetworkReply* reply)
     }
 
     QString err;
-    const QString local = storePayload(payload, reply->url().toString(), contentType, &err);
+    const QString label = reply->property("nameLabel").toString();
+    const QString local =
+        storePayload(payload, reply->url().toString(), contentType, label, &err);
     endRequest();
     if (local.isEmpty()) {
         emit failed(err.isEmpty() ? QStringLiteral("保存图片失败") : err);

@@ -321,18 +321,12 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_fullscreen, &FullscreenGuard::fullscreenChanged, this, &MainWindow::onFullscreenChanged);
 
     // 在线图源：下载完成后自动并入壁纸库
+    // （V4.8 起不再需要在 finished 里恢复按钮启用态——菜单项没有「禁用中」的
+    //  视觉，重复点击由 OnlineSources::busy() 挡掉）
     m_online = new OnlineSources(this);
     connect(m_online, &OnlineSources::imageReady, this, &MainWindow::onOnlineImageReady);
     connect(m_online, &OnlineSources::failed, this, &MainWindow::onOnlineFailed);
     connect(m_online, &OnlineSources::progress, this, &MainWindow::onOnlineProgress);
-    connect(m_online, &OnlineSources::finished, this, [this]() {
-        if (m_urlImportBtn) {
-            m_urlImportBtn->setEnabled(true);
-        }
-        if (m_bingBtn) {
-            m_bingBtn->setEnabled(true);
-        }
-    });
 
     setupWatcher();
     loadSettings();
@@ -485,7 +479,8 @@ void MainWindow::buildUi()
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // V4.6：不再有顶部工具条，所有操作按钮统一收进「设置 → 操作」分组。
+    // V4.8：库管理与播放控制收成壁纸库页的一条操作行，低频项进「更多」菜单。
+    // （旧注释说的「设置 → 操作」分组并不存在，V4.6 就已经撤掉了。）
 
     auto* root = new QHBoxLayout();
     root->setContentsMargins(0, 0, 0, 0);
@@ -624,7 +619,7 @@ QWidget* MainWindow::buildEmptyHint()
     title->setObjectName(QStringLiteral("emptyTitle"));
     title->setAlignment(Qt::AlignHCenter);
 
-    auto* sub = new QLabel(QStringLiteral("到「设置 → 操作」里用「添加图片 / 添加视频」把文件加进来，\n"
+    auto* sub = new QLabel(QStringLiteral("用本页「更多」菜单里的「添加图片 / 添加视频」把文件加进来，\n"
                                           "双击任意一张即可应用到桌面。"),
                            hint);
     sub->setObjectName(QStringLiteral("emptySub"));
@@ -696,107 +691,82 @@ QWidget* MainWindow::buildLibraryPage()
     filterLayout->addWidget(m_sortCombo);
     layout->addWidget(filterRow);
 
-    // ---- 场景预设（V4.7：一键把整套桌面状态切过去）----
-    auto* presetRow = new QWidget(pane);
-    auto* presetLayout = new QHBoxLayout(presetRow);
-    presetLayout->setContentsMargins(0, 0, 0, 0);
-    presetLayout->setSpacing(8);
-    auto* presetLabel = new QLabel(QStringLiteral("场景预设"), presetRow);
-    m_presetCombo = new QComboBox(presetRow);
+    // ---- 操作行（V4.8：原来「场景预设 + 在线添加 + 9 个按钮」三行收成一条）----
+    // 高频的留在行内，低频的进「更多」菜单。工具栏少占两行，画廊就能多显示一行缩略图。
+    auto* actionRow = new QWidget(pane);
+    auto* actionLayout = new QHBoxLayout(actionRow);
+    actionLayout->setContentsMargins(0, 0, 0, 0);
+    actionLayout->setSpacing(8);
+
+    auto* presetLabel = new QLabel(QStringLiteral("场景预设"), actionRow);
+    m_presetCombo = new QComboBox(actionRow);
     m_presetCombo->setToolTip(QStringLiteral(
         "把壁纸、画面效果、挂件、切换策略打包成一个命名场景。存在数据目录的 presets.json 里，"
         "可手动编辑或随配置一起拷走。"));
     m_presetCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    m_presetCombo->setMinimumWidth(180);
-    auto* applyPresetBtn = new QPushButton(QStringLiteral("应用"), presetRow);
+    m_presetCombo->setMinimumWidth(170);
+    auto* applyPresetBtn = new QPushButton(QStringLiteral("应用"), actionRow);
     applyPresetBtn->setObjectName(QStringLiteral("primary"));
     applyPresetBtn->setToolTip(QStringLiteral("立即把选中预设套用到桌面"));
-    m_presetSaveBtn = new QPushButton(QStringLiteral("保存当前为预设"), presetRow);
-    m_presetSaveBtn->setToolTip(QStringLiteral("把当前所有设置存成一个新预设（同名则覆盖）"));
-    m_presetDeleteBtn = new QPushButton(QStringLiteral("删除"), presetRow);
-    m_presetDeleteBtn->setObjectName(QStringLiteral("danger"));
     connect(applyPresetBtn, &QPushButton::clicked, this, &MainWindow::onPresetApply);
-    connect(m_presetSaveBtn, &QPushButton::clicked, this, &MainWindow::onPresetSave);
-    connect(m_presetDeleteBtn, &QPushButton::clicked, this, &MainWindow::onPresetDelete);
-    presetLayout->addWidget(presetLabel);
-    presetLayout->addWidget(m_presetCombo);
-    presetLayout->addWidget(applyPresetBtn);
-    presetLayout->addWidget(m_presetSaveBtn);
-    presetLayout->addWidget(m_presetDeleteBtn);
-    presetLayout->addStretch(1);
-    layout->addWidget(presetRow);
 
-    // ---- 在线图源（V4.7：不用先存到本地再添加）----
-    auto* onlineRow = new QWidget(pane);
-    auto* onlineLayout = new QHBoxLayout(onlineRow);
-    onlineLayout->setContentsMargins(0, 0, 0, 0);
-    onlineLayout->setSpacing(8);
-    auto* onlineLabel = new QLabel(QStringLiteral("在线添加"), onlineRow);
-    m_urlEdit = new QLineEdit(onlineRow);
-    m_urlEdit->setPlaceholderText(QStringLiteral("粘贴图片网址，回车下载到壁纸库…"));
-    m_urlEdit->setClearButtonEnabled(true);
-    m_urlImportBtn = new QPushButton(QStringLiteral("下载"), onlineRow);
-    m_bingBtn = new QPushButton(QStringLiteral("Bing 今日一图"), onlineRow);
-    m_bingBtn->setToolTip(QStringLiteral("抓取 Bing 首页当日壁纸原图并加入壁纸库"));
-    connect(m_urlEdit, &QLineEdit::returnPressed, this, &MainWindow::onUrlImport);
-    connect(m_urlImportBtn, &QPushButton::clicked, this, &MainWindow::onUrlImport);
-    connect(m_bingBtn, &QPushButton::clicked, this, &MainWindow::onBingDaily);
-    onlineLayout->addWidget(onlineLabel);
-    onlineLayout->addWidget(m_urlEdit, 1);
-    onlineLayout->addWidget(m_urlImportBtn);
-    onlineLayout->addWidget(m_bingBtn);
-    layout->addWidget(onlineRow);
-
-    // ---- 壁纸库操作（V4.6：库管理 + 播放控制全部放到壁纸库页）----
-    auto* toolRow = new QWidget(pane);
-    auto* toolLayout = new QHBoxLayout(toolRow);
-    toolLayout->setContentsMargins(0, 0, 0, 0);
-    toolLayout->setSpacing(8);
-
-    auto* addImageBtn = new QPushButton(QStringLiteral("添加图片"), toolRow);
-    addImageBtn->setToolTip(QStringLiteral("向壁纸库添加图片（Ctrl+Shift+I）"));
-    auto* addVideoBtn = new QPushButton(QStringLiteral("添加视频"), toolRow);
-    addVideoBtn->setToolTip(QStringLiteral("向壁纸库添加视频（Ctrl+Shift+V）"));
-    auto* removeBtn = new QPushButton(QStringLiteral("移除选中"), toolRow);
-    removeBtn->setObjectName(QStringLiteral("danger"));
-    removeBtn->setToolTip(QStringLiteral("从库中移除选中项（不删除原文件）"));
-    auto* clearBtn = new QPushButton(QStringLiteral("清空库"), toolRow);
-    clearBtn->setObjectName(QStringLiteral("danger"));
-    clearBtn->setToolTip(QStringLiteral("清空整个壁纸库（不删除原文件）"));
-    connect(addImageBtn, &QPushButton::clicked, this, &MainWindow::onAddImages);
-    connect(addVideoBtn, &QPushButton::clicked, this, &MainWindow::onAddVideos);
-    connect(removeBtn, &QPushButton::clicked, this, &MainWindow::onRemoveSelected);
-    connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearAll);
-
-    m_applyButton = new QPushButton(QStringLiteral("应用选中"), toolRow);
+    m_applyButton = new QPushButton(QStringLiteral("应用选中"), actionRow);
     m_applyButton->setObjectName(QStringLiteral("primary"));
     m_applyButton->setToolTip(QStringLiteral("把画廊中选中的项应用到桌面（回车）"));
-    m_nextButton = new QPushButton(QStringLiteral("下一张"), toolRow);
+    m_nextButton = new QPushButton(QStringLiteral("下一张"), actionRow);
     m_nextButton->setToolTip(QStringLiteral("切换到清单中的下一项（Ctrl+N）"));
-    m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), toolRow);
+    m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), actionRow);
     m_pauseButton->setToolTip(QStringLiteral("暂停 / 继续视频壁纸（Ctrl+P）"));
-    auto* stopBtn = new QPushButton(QStringLiteral("停止壁纸"), toolRow);
-    stopBtn->setToolTip(QStringLiteral("停止视频壁纸，桌面恢复为系统壁纸"));
-    auto* reattachBtn = new QPushButton(QStringLiteral("重新挂载"), toolRow);
-    reattachBtn->setToolTip(QStringLiteral("桌面层失效后重新挂接视频窗口（F5）"));
     connect(m_applyButton, &QPushButton::clicked, this, &MainWindow::onApplySelected);
     connect(m_nextButton, &QPushButton::clicked, this, &MainWindow::onNext);
     connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onTogglePause);
-    connect(stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
-    connect(reattachBtn, &QPushButton::clicked, this, &MainWindow::onReattach);
 
-    toolLayout->addWidget(addImageBtn);
-    toolLayout->addWidget(addVideoBtn);
-    toolLayout->addWidget(removeBtn);
-    toolLayout->addWidget(clearBtn);
-    toolLayout->addSpacing(12);
-    toolLayout->addWidget(m_applyButton);
-    toolLayout->addWidget(m_nextButton);
-    toolLayout->addWidget(m_pauseButton);
-    toolLayout->addWidget(stopBtn);
-    toolLayout->addWidget(reattachBtn);
-    toolLayout->addStretch(1);
-    layout->addWidget(toolRow);
+    // 「更多」：除上面三个高频操作外的全部动作。收成菜单而非平铺，是为了把
+    // 工具栏高度还给画廊——原来 9 个按钮横排一行的宽度也快到窗口极限了。
+    auto* moreBtn = new QPushButton(QStringLiteral("更多"), actionRow);
+    moreBtn->setToolTip(QStringLiteral("添加 / 移除 / 清空、在线下载、停止与重新挂载、预设存取"));
+    auto* moreMenu = new QMenu(moreBtn);
+    moreMenu->setToolTipsVisible(true);
+    moreBtn->setMenu(moreMenu);
+
+    connect(moreMenu->addAction(QStringLiteral("添加图片…")), &QAction::triggered, this,
+            &MainWindow::onAddImages);
+    connect(moreMenu->addAction(QStringLiteral("添加视频…")), &QAction::triggered, this,
+            &MainWindow::onAddVideos);
+    moreMenu->addSeparator();
+    connect(moreMenu->addAction(QStringLiteral("从网址下载…")), &QAction::triggered, this,
+            &MainWindow::onUrlImport);
+    connect(moreMenu->addAction(QStringLiteral("Bing 今日一图")), &QAction::triggered, this,
+            &MainWindow::onBingDaily);
+    moreMenu->addSeparator();
+    auto* actRemove = moreMenu->addAction(QStringLiteral("移除选中"));
+    actRemove->setToolTip(QStringLiteral("从库中移除选中项（不删除原文件）"));
+    connect(actRemove, &QAction::triggered, this, &MainWindow::onRemoveSelected);
+    auto* actClear = moreMenu->addAction(QStringLiteral("清空库"));
+    actClear->setToolTip(QStringLiteral("清空整个壁纸库（不删除原文件）"));
+    connect(actClear, &QAction::triggered, this, &MainWindow::onClearAll);
+    moreMenu->addSeparator();
+    connect(moreMenu->addAction(QStringLiteral("停止壁纸")), &QAction::triggered, this,
+            &MainWindow::onStop);
+    connect(moreMenu->addAction(QStringLiteral("重新挂载桌面层")), &QAction::triggered, this,
+            &MainWindow::onReattach);
+    moreMenu->addSeparator();
+    // 预设的保存 / 删除作用于操作行里当前选中的那一项
+    connect(moreMenu->addAction(QStringLiteral("保存当前为预设…")), &QAction::triggered, this,
+            &MainWindow::onPresetSave);
+    connect(moreMenu->addAction(QStringLiteral("删除当前预设…")), &QAction::triggered, this,
+            &MainWindow::onPresetDelete);
+
+    actionLayout->addWidget(presetLabel);
+    actionLayout->addWidget(m_presetCombo);
+    actionLayout->addWidget(applyPresetBtn);
+    actionLayout->addSpacing(12);
+    actionLayout->addWidget(m_applyButton);
+    actionLayout->addWidget(m_nextButton);
+    actionLayout->addWidget(m_pauseButton);
+    actionLayout->addStretch(1);
+    actionLayout->addWidget(moreBtn);
+    layout->addWidget(actionRow);
 
     // ---- 画廊（与空状态提示叠放，库为空时给一句人话而不是一片空白）----
     m_galleryStack = new QStackedWidget(pane);
@@ -852,10 +822,27 @@ QWidget* MainWindow::buildLibraryPage()
 
 QWidget* MainWindow::buildSettingsPage()
 {
-    auto* scroll = new QScrollArea(this);
+    // V4.8：12 个分组平铺一列，找一项得从头滚到尾；改成左侧二级导航 + 右侧单页。
+    // 12 个分组的构造代码一个没动，只是按页切换显隐（见函数末尾的归属表）——
+    // 所以 loadSettings / saveSettings 那套「按指针读写控件」的逻辑完全不受影响。
+    auto* container = new QWidget(this);
+    auto* outer = new QHBoxLayout(container);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    m_settingsNav = new QListWidget(container);
+    m_settingsNav->setObjectName(QStringLiteral("navRail"));
+    m_settingsNav->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_settingsNav->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_settingsNav->setTextElideMode(Qt::ElideRight);
+    m_settingsNav->setFixedWidth(132);
+    outer->addWidget(m_settingsNav);
+
+    auto* scroll = new QScrollArea(container);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    outer->addWidget(scroll, 1);
 
     auto* pane = new QWidget(scroll);
     auto* layout = new QVBoxLayout(pane);
@@ -1113,6 +1100,11 @@ QWidget* MainWindow::buildSettingsPage()
     auto* presetApplyBtn = new QPushButton(QStringLiteral("应用这个预设"), presetBox);
     presetApplyBtn->setObjectName(QStringLiteral("primary"));
     connect(presetApplyBtn, &QPushButton::clicked, this, &MainWindow::onPresetApply);
+    // 镜像的意义就是「调完效果就地存」，所以保存得在这里也能按到。
+    // （V4.8 把壁纸库页的保存入口收进了「更多」菜单，这一处更不能缺。）
+    auto* presetSaveBtn = new QPushButton(QStringLiteral("保存当前为新预设…"), presetBox);
+    presetSaveBtn->setToolTip(QStringLiteral("把当前所有设置存成一个新预设（同名则覆盖）"));
+    connect(presetSaveBtn, &QPushButton::clicked, this, &MainWindow::onPresetSave);
     auto* presetNote = new QLabel(QStringLiteral(
                                       "预设把壁纸、填充方式、画面效果、挂件、自动切换策略一起记下来，"
                                       "一键切换整套桌面状态。\n"
@@ -1122,6 +1114,7 @@ QWidget* MainWindow::buildSettingsPage()
     presetNote->setWordWrap(true);
     presetForm->addRow(QStringLiteral("选择预设"), m_monitorPresetCombo);
     presetForm->addRow(QString(), presetApplyBtn);
+    presetForm->addRow(QString(), presetSaveBtn);
     presetForm->addRow(QString(), presetNote);
     layout->addWidget(presetBox);
 
@@ -1233,7 +1226,38 @@ QWidget* MainWindow::buildSettingsPage()
 
     layout->addStretch(1);
     scroll->setWidget(pane);
-    return scroll;
+
+    // ---- 分组 → 子页归属（V4.8）----
+    // 低压力的项（省电；便携模式 / 缓存 / 日志这类装完基本不再动的）收进「高级」，
+    // 首屏只留日常真的会调的几项。m_settingsPages 的下标与导航行号一一对应。
+    auto addPage = [this](const QString& name, const QList<QWidget*>& boxes) {
+        new QListWidgetItem(name, m_settingsNav);
+        m_settingsPages.append(boxes);
+    };
+    addPage(QStringLiteral("壁纸"), {imageBox});
+    addPage(QStringLiteral("播放"), {videoBox, autoBox, strategyBox});
+    addPage(QStringLiteral("场景"), {sceneBox, presetBox});
+    addPage(QStringLiteral("外观与效果"), {fxBox, widgetBox, audioBox, lookBox});
+    addPage(QStringLiteral("高级"), {powerBox, miscBox});
+
+    const auto showPage = [this, scroll](int row) {
+        if (row < 0 || row >= m_settingsPages.size()) {
+            return;
+        }
+        for (int i = 0; i < m_settingsPages.size(); ++i) {
+            for (QWidget* box : m_settingsPages.at(i)) {
+                box->setVisible(i == row);
+            }
+        }
+        if (QScrollBar* bar = scroll->verticalScrollBar()) {
+            bar->setValue(0); // 换页回到顶部，否则会停在上一个子页的滚动位置
+        }
+    };
+    connect(m_settingsNav, &QListWidget::currentRowChanged, this, showPage);
+    m_settingsNav->setCurrentRow(0);
+    showPage(0);
+
+    return container;
 }
 
 // ---------------------------------------------------------------- 多屏（V4.6）
@@ -1611,6 +1635,11 @@ void MainWindow::loadSettings()
     }
     m_nav->setCurrentRow(page);
     m_pages->setCurrentIndex(page);
+    // 设置页的二级导航也记住（V4.8）：上次停在「高级」就还停在「高级」
+    if (m_settingsNav) {
+        const int sub = s.value(QStringLiteral("settingsPage"), 0).toInt();
+        m_settingsNav->setCurrentRow(sub >= 0 && sub < m_settingsNav->count() ? sub : 0);
+    }
     updateGalleryMetrics();
 
     m_theme = AppTheme::fromIndex(themeIndex);
@@ -1655,6 +1684,9 @@ void MainWindow::saveSettings()
     }
     s.setValue(QStringLiteral("winGeometry"), saveGeometry());
     s.setValue(QStringLiteral("winPage"), m_nav->currentIndex().row());
+    if (m_settingsNav) {
+        s.setValue(QStringLiteral("settingsPage"), m_settingsNav->currentIndex().row());
+    }
     s.setValue(QStringLiteral("volume"), m_volumeSlider->value());
     s.setValue(QStringLiteral("interval"), m_intervalSpin->value());
     s.setValue(QStringLiteral("autoSwitch"), m_autoSwitch->isChecked());
@@ -2241,9 +2273,6 @@ void MainWindow::refreshPresetCombos()
             combo->setCurrentIndex(index >= 0 ? index : 0);
         }
     }
-    if (m_presetDeleteBtn) {
-        m_presetDeleteBtn->setEnabled(!m_presets.isEmpty());
-    }
 }
 
 void MainWindow::onPresetApply()
@@ -2317,23 +2346,29 @@ void MainWindow::onPresetDelete()
 
 void MainWindow::onUrlImport()
 {
-    if (!m_online || !m_urlEdit) {
-        return;
-    }
-    const QString url = m_urlEdit->text().trimmed();
-    if (url.isEmpty()) {
-        updateStatus(QStringLiteral("先粘贴一个图片网址"), true);
+    if (!m_online) {
         return;
     }
     if (m_online->busy()) {
         updateStatus(QStringLiteral("上一批下载还没结束，稍候再试"), true);
         return;
     }
-    // 一次可以贴多个地址，换行分隔
-    const QStringList urls = url.split(QRegularExpression(QStringLiteral("[\\s,]+")),
-                                      Qt::SkipEmptyParts);
-    m_urlImportBtn->setEnabled(false);
-    m_bingBtn->setEnabled(false);
+    // V4.8：入口由常驻输入框改成弹窗——省下一整行工具栏高度。
+    // 一次仍可贴多个地址（换行或逗号分隔）。
+    bool accepted = false;
+    const QString input = QInputDialog::getText(
+        this, QStringLiteral("从网址下载图片"),
+        QStringLiteral("粘贴图片网址（多个地址用换行或逗号分隔）："), QLineEdit::Normal,
+        QString(), &accepted);
+    if (!accepted) {
+        return;
+    }
+    const QStringList urls = input.split(QRegularExpression(QStringLiteral("[\\s,]+")),
+                                         Qt::SkipEmptyParts);
+    if (urls.isEmpty()) {
+        updateStatus(QStringLiteral("没有识别到有效网址"), true);
+        return;
+    }
     updateStatus(QStringLiteral("正在下载 %1 张图片…").arg(urls.size()));
     for (const QString& single : urls) {
         m_online->downloadImage(single);
@@ -2349,8 +2384,6 @@ void MainWindow::onBingDaily()
         updateStatus(QStringLiteral("上一批下载还没结束，稍候再试"), true);
         return;
     }
-    m_urlImportBtn->setEnabled(false);
-    m_bingBtn->setEnabled(false);
     updateStatus(QStringLiteral("正在获取 Bing 今日一图…"));
     m_online->downloadBingDaily(0);
 }

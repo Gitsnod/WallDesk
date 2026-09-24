@@ -1,12 +1,19 @@
-// WallDesk v4.7.0 单元验证：MediaInfo 朝向/档位判定 + PresetManager 存取往返。
-// 只依赖 Qt Core，独立于主程序，用 qmake/CMake 单独编译运行。
+// WallDesk 单元验证：MediaInfo 朝向/档位判定、PresetManager 存取往返、
+// OnlineSources 下载命名与内容查重。独立于主程序，不联网。
+//
+// 内容查重这几条是 v4.8 那次缺陷的回归网：同一天点两次「Bing 每日一图」，
+// 程序会实打实重下 3.7 MB，再落成一个 _1 副本，库里也多一条重复条目。
 #include "MediaInfo.h"
+#include "OnlineSources.h"
 #include "PresetManager.h"
 
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTextStream>
 
 static int g_fail = 0;
@@ -162,6 +169,81 @@ int main(int argc, char** argv)
         }
     } else {
         QFile::remove(presetPath);
+    }
+
+    // ---- OnlineSources：下载文件命名（纯函数，纯字符串断言）----
+    out << "[OnlineSources] 下载文件命名\n";
+    const QString bingUrl = QStringLiteral(
+        "https://www.bing.com/th?id=OHR.ElGolfo_ZH-CN8329995759_UHD.jpg&rf=LaDigue_UHD.jpg&pid=hp");
+    check(OnlineSources::fileNameFor(bingUrl, QString(), QStringLiteral("bing_2026-09-24_ElGolfo"))
+              == QStringLiteral("bing_2026-09-24_ElGolfo.jpg"),
+          "Bing 图按 label 命名 -> bing_2026-09-24_ElGolfo.jpg");
+    check(OnlineSources::fileNameFor(bingUrl, QString(), QString())
+              .startsWith(QStringLiteral("bing_com_")),
+          "Bing 地址没给 label 时退回「域名_短哈希」（不再是 wall_ 开头）");
+    check(OnlineSources::fileNameFor(QStringLiteral("https://i.pximg.net/img/2024/01/sunset.jpg"),
+                                     QString(), QString())
+              == QStringLiteral("i_pximg_net_sunset.jpg"),
+          "普通地址 -> 域名_原文件名");
+    check(OnlineSources::fileNameFor(QStringLiteral("https://www.example.com/a/photo.png"),
+                                     QString(), QString())
+              == QStringLiteral("example_com_photo.png"),
+          "www. 前缀被剥掉");
+    // 路径里全是中文（净化后为空）-> 必须退回域名，不能产出 ".jpg" 这种无名文件。
+    // 用百分号编码写地址，QUrl::path() 会解成「我的图.jpg」。
+    check(OnlineSources::fileNameFor(QStringLiteral("https://a.com/%E6%88%91%E7%9A%84%E5%9B%BE.jpg"),
+                                     QString(), QString())
+              == QStringLiteral("a_com.jpg"),
+          "文件名净化后为空时退回域名");
+    const QString noName =
+        OnlineSources::fileNameFor(QStringLiteral("https://picsum.photos/1920/1080"), QString(),
+                                   QString());
+    const QString hashTail = noName.mid(QStringLiteral("picsum_photos_").size());
+    check(noName.startsWith(QStringLiteral("picsum_photos_")) && hashTail.size() == 12
+              && hashTail.endsWith(QStringLiteral(".jpg")),
+          "无可读文件名时退回「域名_8位哈希」: " + noName);
+    check(OnlineSources::fileNameFor(QStringLiteral("https://a.com/wall"),
+                                     QStringLiteral("image/png"), QString())
+              .endsWith(QStringLiteral(".png")),
+          "URL 没有扩展名时采用响应头的类型");
+
+    // ---- OnlineSources：内容查重（v4.8 缺陷的回归网）----
+    out << "[OnlineSources] 重复下载内容查重\n";
+    QTemporaryDir tmp;
+    check(tmp.isValid(), "临时目录创建成功");
+    if (tmp.isValid()) {
+        const QByteArray payload(4096, 'A');
+        auto writeFile = [&tmp](const QString& name, const QByteArray& data) {
+            QFile f(QDir(tmp.path()).filePath(name));
+            if (!f.open(QIODevice::WriteOnly)) {
+                return false;
+            }
+            return f.write(data) == data.size();
+        };
+        check(writeFile(QStringLiteral("same.bin"), payload), "写入同内容文件");
+        check(writeFile(QStringLiteral("sameSizeOther.bin"), QByteArray(4096, 'B')),
+              "写入同大小但内容不同的文件");
+        check(writeFile(QStringLiteral("halfSize.bin"), QByteArray(2048, 'A')),
+              "写入半长文件");
+
+        // 关键一条：目录里只有 same.bin 与 payload 同内容 -> 命中它。
+        // 这正是「同一张图存成两个不同文件名」时复用已有一份的判据。
+        const QString hit = OnlineSources::findDuplicateByContent(tmp.path(), payload);
+        check(QFileInfo(hit).fileName() == QStringLiteral("same.bin"),
+              "同内容命中 -> " + QFileInfo(hit).fileName());
+
+        // 只有「同大小不同内容」时不得误判为重复
+        QTemporaryDir tmp2;
+        QFile other(QDir(tmp2.path()).filePath(QStringLiteral("other.bin")));
+        if (other.open(QIODevice::WriteOnly)) {
+            other.write(QByteArray(4096, 'C'));
+            other.close();
+        }
+        check(OnlineSources::findDuplicateByContent(tmp2.path(), payload).isEmpty(),
+              "同大小但内容不同 -> 不误判为重复");
+
+        check(OnlineSources::findDuplicateByContent(tmp.path(), QByteArray(32, 'A')).isEmpty(),
+              "目录里没有同内容文件 -> 返回空（不误命中 halfSize.bin）");
     }
 
     out << "\n结果: " << g_pass << " 通过, " << g_fail << " 失败\n";
