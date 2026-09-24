@@ -8,23 +8,40 @@
 > 已发布：<https://github.com/Gitsnod/WallDesk> —— 安装程序与绿色版见
 > [Releases](https://github.com/Gitsnod/WallDesk/releases)。
 
-**当前版本：4.7.0**。V4.7 让功能之间连成体系——把 4.6 铺开的零散能力收成「场景预设」，
-并补上在线图源、智能分组与视频配频谱：
+**当前版本：4.8.0**。V4.8 不铺新功能，专治「用起来别扭」：修掉在线下载的重复堆积、
+让下载下来的文件有个能认的名字，再把挤成一片的工具条与设置页重新分层。
 
-1. **场景预设（新）**：把「壁纸 + 填充方式 + 画面效果 + 桌面挂件 + 自动切换策略 + 逐屏配置」
+1. **重复下载不再堆副本（缺陷修复）**：同一张图重复下载，现在会在落盘前按内容
+   （SHA-256，先比文件大小预筛）查重，命中已有文件就直接复用，不再产生 `xxx_1.jpg`
+   这类副本。此前 `downloads/` 里 14 个文件只有 10 份唯一内容，**白占 14.2 MiB**。
+   Bing 每日一图更进一步——按命名就能判断出「今天这张已经下过」，连请求都不发。
+2. **下载文件改可读命名**：Bing 图存成 `bing_2026-09-24_ElGolfo.jpg`（日期取图源
+   自身的 `startdate`，不是本机日期），其它网址存成 `域名_原文件名.jpg`，
+   路径里没有可用文件名时退回 `域名_短哈希`。此前一律是 `wall_<url哈希>.jpg`。
+3. **壁纸库页工具条收拢**：四行九个按钮收成一条操作行加一个「更多」溢出菜单
+   （添加图片 / 添加视频 / 从网址下载 / Bing 今日一图 / 移除选中 / 清空库 /
+   停止壁纸 / 重新挂载桌面层 / 预设存删），画廊多出一行可视面积。
+4. **设置页加二级导航**：12 个分组的单列长滚动改为左侧分类加右侧滚动区，
+   分「壁纸 / 播放 / 场景 / 外观与效果 / 高级」五页，停在哪个子页会被记住。
+5. **补齐设置页「场景预设」的保存入口（缺陷修复）**：该分组此前只有「应用」没有
+   「保存」，想存预设必须跳回壁纸库页，与设计意图不符。
+
+**4.7 的五个重点**：
+
+1. **场景预设**：把「壁纸 + 填充方式 + 画面效果 + 桌面挂件 + 自动切换策略 + 逐屏配置」
    打包成一个命名预设，一键切换整套桌面状态。预设存在数据目录的 `presets.json`（JSON，
    可手改、可随配置拷走），壁纸库页与设置页各有一个入口，托盘右键也能直接切。
-2. **播放历史持久化（新，含缺陷修复）**：「随机不重复」改为基于落盘的播放历史挑图，
+2. **播放历史持久化（含缺陷修复）**：「随机不重复」改为基于落盘的播放历史挑图，
    重启程序也不会立刻撞上刚看过的内容。顺带修掉一个真实缺陷——原先自动切换走的是
    `pickNextIndex()`，那里 mode 2 直接退化成可重复随机，**导致「随机不重复」在自动切换下
    从未真正生效**；现在「下一张」与自动切换统一走同一套策略。
-3. **在线图源（新）**：不用再「先存到本地再添加」。可粘贴图片网址直接下载入库
+3. **在线图源**：不用再「先存到本地再添加」。可粘贴图片网址直接下载入库
    （支持一次多个地址、换行分隔），也可一键抓取 Bing 每日一图原图。下载落在
    数据目录的 `downloads/`，可被「在线下载」筛选器单独筛出。
-4. **按分辨率 / 朝向分组（新）**：壁纸多了以后「找一张竖屏图给副屏」这类需求靠文件名没法做。
+4. **按分辨率 / 朝向分组**：壁纸多了以后「找一张竖屏图给副屏」这类需求靠文件名没法做。
    新增按横向 / 纵向 / 方形与 SD…4K 五档筛选，并支持「按分辨率」排序；
    分辨率只读文件头取（不解码整张图），几百项的库也是秒出，结果带缓存。
-5. **视频壁纸配频谱（新）**：此前视频壁纸一律走静音路径，桌面频谱对视频永远没反应。
+5. **视频壁纸配频谱**：此前视频壁纸一律走静音路径，桌面频谱对视频永远没反应。
    现在音量 > 0 时会建立音频链路，视频声音进入系统混音，WASAPI 回环采集随之驱动频谱；
    音量仍交给系统音量控制。开了频谱却发现没反应时，把「设置 → 播放 → 视频 → 音量」拉到 0 以上即可。
 
@@ -139,7 +156,7 @@ Qt 套件与编译器必须同为 64 位，否则链接报 `LNK1112`。
 build.bat release
 ```
 
-产物：`dist\WallDesk-4.7.0-win64.zip`（约 25–60 MB，取决于是否内嵌 VLC）。
+产物：`dist\WallDesk-4.8.0-win64.zip`（约 25–60 MB，取决于是否内嵌 VLC）。
 用户解压即运行，无需安装 Qt / VLC / 运行时库。包内含：
 
 - `WallDesk.exe` + Qt 运行时 DLL（windeployqt 部署）
@@ -149,11 +166,11 @@ build.bat release
 
 ### 形态 2：安装程序（给非技术用户）
 
-1. 先执行形态 1 生成 `dist\WallDesk-4.7.0-win64\` 目录
+1. 先执行形态 1 生成 `dist\WallDesk-4.8.0-win64\` 目录
 2. 安装 [Inno Setup 6](https://jrsoftware.org/isdl.php)（免费，约 5 MB）
 3. 命令行执行 `iscc installer\WallDesk.iss`，或在 Inno 里打开该脚本按 F9
 
-产物：`dist\WallDesk-4.7.0-setup.exe`。安装到用户目录（无需管理员权限），
+产物：`dist\WallDesk-4.8.0-setup.exe`。安装到用户目录（无需管理员权限），
 提供桌面图标、开始菜单、可选开机自启、完整卸载。
 
 ### 形态 3：单文件 exe（内嵌 VLC 时）
@@ -169,56 +186,64 @@ build.bat release
 - [ ] 用 `SHA256SUMS.txt` 抽查一两个文件的校验值
 - [ ] 确认 LICENSE 与 THIRD-PARTY-NOTICES.txt 已随包（LGPL 合规要求）
 
-## 五、上传到 GitHub（步骤）
+## 五、同步到 GitHub
 
-### 5.1 首次上传
+仓库地址：<https://github.com/Gitsnod/WallDesk>（已创建，无需再 `git init`）
 
-```bash
-cd WallpaperDesk
-
-git init                          # 初始化仓库（只需一次）
-git add .                         # 暂存全部文件（.gitignore 已排除构建产物）
-git status                        # 确认 src/VlcBundle.bin 等不在列表里
-git commit -m "WallDesk v4.7.0: 场景预设、在线图源、智能分组、视频配频谱"
-
-# 在 GitHub 网页上新建空仓库（不要勾选初始化 README），然后：
-git branch -M main
-git remote add origin https://github.com/<你的用户名>/WallDesk.git
-git push -u origin main
-```
-
-### 5.2 发布 Release（把构建产物挂到 GitHub 供下载）
+### 5.1 常规做法（能连通 github.com 的机器）
 
 ```bash
-# 打标签
-git tag -a v4.7.0 -m "WallDesk 4.7.0"
-git push origin v4.7.0
+git add -A && git commit -m "说明本次改动"
+git push -u origin main                       # 首次需要 -u
+
+git tag -a v4.8.0 -m "WallDesk 4.8.0"
+git push origin v4.8.0
 ```
 
-然后到 GitHub 仓库页 → **Releases** → **Draft a new release**：
-- Tag 选 `v4.7.0`，标题 `WallDesk 4.7.0`
-- 上传 `dist\WallDesk-4.7.0-win64.zip` 和（可选）`WallDesk-4.7.0-setup.exe`
-- 描述里粘贴「更新内容」+ 校验值（从 SHA256SUMS.txt 取主程序那一行）
-- 点 **Publish release**
-
-有 GitHub CLI（`winget install GitHub.cli`）的话一条命令搞定：
+Release 可在网页上 **Releases → Draft a new release** 发起，也可用 GitHub CLI：
 
 ```bash
-gh release create v4.7.0 dist\WallDesk-4.7.0-win64.zip dist\WallDesk-4.7.0-setup.exe ^
-  --title "WallDesk 4.7.0" --notes "见 README 九、版本变更"
+gh release create v4.8.0 dist\WallDesk-4.8.0-setup.exe dist\WallDesk-4.8.0-win64.zip ^
+  --title "WallDesk 4.8.0" --notes-file tools\release-notes-v4.8.0.md
 ```
 
-### 5.3 日常更新
+### 5.2 本开发机专用做法（github.com 不可达）
+
+本开发机经代理上网，**只有 `api.github.com` 与 `uploads.github.com` 放行，
+`github.com` 本身不通**（实测 HTTP 000 超时），且未安装 `gh` CLI。
+因此 `git push` 与 `gh release create` 在这台机器上**必然失败**，
+改走 Git Data API 通道（技能 `github-via-api`，纯标准库，无依赖）：
 
 ```bash
-git add -A && git commit -m "说明本次改动" && git push
+S="$HOME/.workbuddy/skills/github-via-api/scripts/github_via_api.py"
+
+python "$S" status                            # 看本地 / 远端差多少（只读）
+python "$S" push --dry-run                    # 演练：只列出待推送提交
+python "$S" push                              # 推送；结束后自动逐文件核对远端树
+python "$S" tags v4.8.0                       # 同步标签
+python "$S" release --tag v4.8.0 --title "WallDesk v4.8.0" \
+       --notes-file tools/release-notes-v4.8.0.md \
+       --asset dist/WallDesk-4.8.0-setup.exe \
+       --asset dist/WallDesk-4.8.0-win64.zip
 ```
+
+令牌由脚本自动从 `git credential-manager get` 取。
+**不要用 `git credential fill`** —— 在 Git Bash 里它会挂住等交互输入。
+
+三条要点：
+
+- **推树必须全量**，绝不能传 `base_tree`。曾以「远端父提交的树」为 base、再叠加本地
+  `diff-tree` 的清单，两者语义不匹配，结果把远端 `main` 推成只剩 6 个条目（事故级）。
+- Git Data API 重放出的提交 **SHA 与本地不同，但 tree SHA 完全相同**。工具据此反查
+  「远端 HEAD 相当于哪个本地提交」，不必手工维护映射表。
+- **推完必须逐文件核对**（`push` 已自动执行，报 MISSING / DIFF / MODE / EXTRA 四类问题），
+  不通过就不要继续打标签、发 Release。
 
 ### 注意事项
 
 - **`src\VlcBundle.bin` 不要提交**：几十 MB 的打包产物，已在 .gitignore 排除；
   其他开发者克隆后自己运行 `tools\pack_vlc.py` 生成
-- 仓库建议设为 **Public**（MIT 许可，无敏感信息）；内部使用就设 Private
+- 仓库是 **Public**（MIT 许可，无敏感信息）
 - 提交前 `git status` 过一眼，确认没有混入壁纸文件、私人路径
 
 ## 六、已知限制与排查
@@ -229,6 +254,7 @@ git add -A && git commit -m "说明本次改动" && git push
 | 「未能定位桌面 WorkerW 图层」 | 第三方桌面美化工具占用；重启 `explorer.exe`；失败时自动降级为顶层置底窗口 |
 | 视频黑屏但状态显示已应用 | 编码不受支持（HEVC/AV1 需硬件解码）；切「软件解码」档位或换 H.264 测试 |
 | 编译报 `LNK1112` | Qt 套件与编译器位数不一致，换 64 位套件 |
+| 打包报 `Unable to query qtpaths: Error running binary qtpaths: pipe:` | 本机 `windeployqt` 拉不起子进程 `qtpaths`（环境层问题——`qtpaths --query QT_INSTALL_PREFIX` 单独运行正常，换 POSIX/Windows 两种 PATH、带不带 PATH、沙箱内外都一样）。改用 `python tools\make_release.py --deploy-from build`：从构建目录里已有的那份 Qt 部署直接拷贝运行时 |
 | 休眠唤醒后视频消失 | 已自动处理：监听电源广播自动重挂续播，另有看门狗兜底 |
 | 资源管理器重启后失效 | 看门狗每 2–8 秒校验，异常自动重挂 |
 | 用户说「装了打不开」 | 让其打开 `数据目录\logs\WallDesk.log`，首行即有系统与 Qt 版本 |
@@ -297,6 +323,7 @@ WallpaperDesk/
 
 | 版本 | 主要变更 |
 |------|----------|
+| **4.8.0** | 在线下载按内容（SHA-256，先比大小预筛）查重，命中即复用，不再堆同图副本（此前 `downloads/` 14 个文件仅 10 份唯一内容，白占 14.2 MiB）；下载文件改可读命名（`bing_<图源日期>_<图片名>.jpg` / `域名_原文件名` / 无原名时 `域名_短哈希`，原为 `wall_<url哈希>`）；Bing 每日一图增加下载前命名预检，已存在则连请求都不发；壁纸库页四行九按钮收成一条操作行 + 「更多」溢出菜单；设置页 12 组单列改为左侧二级导航（壁纸 / 播放 / 场景 / 外观与效果 / 高级）并持久化最后所在子页；补齐设置页「场景预设」缺失的保存按钮 |
 | **4.7.0** | 新增场景预设（`PresetManager`，JSON 存 `presets.json`，壁纸库页 / 设置页 / 托盘三处入口）；播放历史持久化，并修复「随机不重复」在自动切换下退化失效的真实缺陷（统一走 `nextIndexByPolicy()`）；新增在线图源（`OnlineSources`：URL 导入 + Bing 每日一图，带大小上限与非法地址拦截）；新增按分辨率 / 朝向分组筛选与排序（`MediaInfo`，只读文件头 + 缓存）；视频壁纸支持驱动桌面频谱（音量 > 0 时建立音频链路，`VlcPlayer::play` 增加 `muteOutput` 参数走 `:no-audio` 省电路径） |
 | **4.6.1** | 修复加载配置时被默认值覆盖的根因缺陷（恢复开关、锁屏暂停、视频缩略图等默认开启项曾被误关）——引入加载期禁写守卫并为各开关接入即时落盘；画面效果新增「重置效果」按钮；桌面挂件改为圆角半透明卡片 + 文字阴影 + 日期高亮；修复克隆 / 镜像模式下逐屏壁纸显示器重复列出的问题；壁纸库操作区（库管理 + 播放控制）合并为同一行 |
 | **4.6.0** | 删除顶部工具条，库管理与播放控制收进「设置 → 操作」；删除左侧「工具」导航，其功能并入设置页（外观主题、数据目录 / 日志、关于、退出）；修复「启动时恢复上次壁纸」失效；新增多屏独立壁纸（`IDesktopWallpaper` 逐屏设置）；新增画面效果（亮度 / 对比度 / 饱和度 / 模糊 / 暗角 / 黑白）；新增桌面挂件（时钟 / 日历 / 自定义文字）与音乐可视化（WASAPI 回环 + FFT 频谱）；新增切换策略（顺序 / 随机 / 随机不重复，范围可限定图片 / 视频 / 收藏）与定时场景；壁纸库新增搜索、过滤、收藏；导航改为「壁纸库 / 设置 / 多屏」 |
