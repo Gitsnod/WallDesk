@@ -26,50 +26,7 @@
 5. **补齐设置页「场景预设」的保存入口（缺陷修复）**：该分组此前只有「应用」没有
    「保存」，想存预设必须跳回壁纸库页，与设计意图不符。
 
-**4.7 的五个重点**：
-
-1. **场景预设**：把「壁纸 + 填充方式 + 画面效果 + 桌面挂件 + 自动切换策略 + 逐屏配置」
-   打包成一个命名预设，一键切换整套桌面状态。预设存在数据目录的 `presets.json`（JSON，
-   可手改、可随配置拷走），壁纸库页与设置页各有一个入口，托盘右键也能直接切。
-2. **播放历史持久化（含缺陷修复）**：「随机不重复」改为基于落盘的播放历史挑图，
-   重启程序也不会立刻撞上刚看过的内容。顺带修掉一个真实缺陷——原先自动切换走的是
-   `pickNextIndex()`，那里 mode 2 直接退化成可重复随机，**导致「随机不重复」在自动切换下
-   从未真正生效**；现在「下一张」与自动切换统一走同一套策略。
-3. **在线图源**：不用再「先存到本地再添加」。可粘贴图片网址直接下载入库
-   （支持一次多个地址、换行分隔），也可一键抓取 Bing 每日一图原图。下载落在
-   数据目录的 `downloads/`，可被「在线下载」筛选器单独筛出。
-4. **按分辨率 / 朝向分组**：壁纸多了以后「找一张竖屏图给副屏」这类需求靠文件名没法做。
-   新增按横向 / 纵向 / 方形与 SD…4K 五档筛选，并支持「按分辨率」排序；
-   分辨率只读文件头取（不解码整张图），几百项的库也是秒出，结果带缓存。
-5. **视频壁纸配频谱**：此前视频壁纸一律走静音路径，桌面频谱对视频永远没反应。
-   现在音量 > 0 时会建立音频链路，视频声音进入系统混音，WASAPI 回环采集随之驱动频谱；
-   音量仍交给系统音量控制。开了频谱却发现没反应时，把「设置 → 播放 → 视频 → 音量」拉到 0 以上即可。
-
-**4.6.1 的修复与打磨**：
-
-1. **修复配置被默认值覆盖（重要）**：此前加载配置的过程中，先被赋值的控件会触发一次保存，
-   把**尚未加载**的复选框按 Qt 默认值（未勾选）写回注册表——这就是「启动时恢复上次壁纸」
-   勾了也没用的真正根因，连「锁屏暂停 / 视频缩略图」等默认开启项也会被误关。现引入加载期
-   禁写守卫（`m_loading`），并在各开关的 `toggled` 上即时落盘。
-2. **画面效果增加「重置效果」按钮**：一键把所有滑块恢复到默认值。
-3. **桌面挂件美化**：圆角半透明卡片、文字阴影、日期高亮，观感更现代。
-4. **修复逐屏壁纸显示器重复**：克隆 / 镜像模式下同一块物理屏会被列出多次，现按设备名去重。
-5. **壁纸库操作区合并成一行**：库管理（添加 / 移除 / 清空）与播放控制（应用 / 下一张 / 暂停 /
-   停止 / 重新挂载）同排展示，不再分两处。
-
-**4.6 的五个重点**：
-
-1. **去顶部工具条**：原顶部工具条与左侧「工具」页一并并入设置页（外观主题、打开数据目录 /
-   日志、关于、退出）；库管理与播放控制同排落在壁纸库页顶部；左侧导航只保留
-   「壁纸库 / 设置 / 多屏」。
-2. **「启动时恢复上次壁纸」修复**：见上方 4.6.1 第 1 条——真正原因是加载期回写覆盖，
-   现由加载期禁写守卫 + 即时落盘共同保证。
-3. **多屏与画面效果**：新增「多屏」页，可用系统 `IDesktopWallpaper` 接口给每台显示器单独指定图片壁纸；
-   设置页新增亮度 / 对比度 / 饱和度 / 模糊 / 暗角 / 黑白效果（图片实时处理，视频走 libVLC adjust 滤镜）。
-4. **桌面挂件与音乐可视化**：新增透明桌面挂件层，支持时钟 / 日历 / 自定义文字，可指定屏幕与位置；
-   新增 WASAPI 回环采集 + FFT 频谱，把系统声音画成桌面底部频谱条。
-5. **切换策略与定时场景**：自动切换支持顺序 / 随机 / 随机不重复，范围可限定全部 / 仅图片 / 仅视频 /
-   仅收藏；支持按时段指定壁纸，到点自动切换。
+各版本的功能亮点与修复明细统一收录在第九节「版本历史」，本节只展开当前版本。
 
 ---
 
@@ -203,16 +160,56 @@ git push origin v4.8.0
 Release 可在网页上 **Releases → Draft a new release** 发起，也可用 GitHub CLI：
 
 ```bash
-gh release create v4.8.0 dist\WallDesk-4.8.0-setup.exe dist\WallDesk-4.8.0-win64.zip ^
-  --title "WallDesk 4.8.0" --notes-file tools\release-notes-v4.8.0.md
+gh release create v4.8.0 dist/WallDesk-4.8.0-setup.exe dist/WallDesk-4.8.0-win64.zip \
+  --title "WallDesk 4.8.0" --notes-file tools/release-notes-v4.8.0.md
 ```
 
-### 5.2 本开发机专用做法（github.com 不可达）
+### 5.2 本开发机的网络现状与通道选择
 
-本开发机经代理上网，**只有 `api.github.com` 与 `uploads.github.com` 放行，
-`github.com` 本身不通**（实测 HTTP 000 超时），且未安装 `gh` CLI。
-因此 `git push` 与 `gh release create` 在这台机器上**必然失败**，
-改走 Git Data API 通道（技能 `github-via-api`，纯标准库，无依赖）：
+这台机器 **HTTPS 到 `github.com` 被拦截**，但拦的是**主机名**而非整台服务器——同一 IP 段
+（`20.205.243.x`）内 `api.github.com` 通、`github.com` 不通，与 DNS、IP 都无关：
+
+| 目标 | 实测 | 用途 |
+|------|------|------|
+| `github.com:443` | **不通**（HTTP 000；TCP 与 TLS 握手能建立，实际请求无响应） | 网页、`git push`、`gh` 设备码登录 |
+| `api.github.com` | 通（HTTP 200，0.5 s） | REST API、`gh` 绝大多数命令 |
+| `codeload.github.com` | 通（HTTP 200） | 下载仓库 tar / zip 归档 |
+| `objects.githubusercontent.com` | 通（根路径 HTTP 404 属正常） | Release 资产的实际下载源 |
+| `uploads.github.com` | 通（HTTP 302） | 上传 Release 资产 |
+| `ssh.github.com:22` 与 `:443` | 通（SSH 握手建立，`Permission denied (publickey)` 表示仅缺密钥） | 以 SSH 协议操作 git |
+| `www.microsoft.com` | **不通** | 说明不是只针对 GitHub，而是按域名放行的策略 |
+
+本机另装有终端安全管理代理（`NSecAgent`）；带代理、清空代理、绕过代理三种方式结果一致，
+沙箱内外也一致。**结论：这是本机网络策略层面的按域名拦截，不是 GitHub 故障，也不是 Git 配置问题。**
+
+于是本机按下面顺序选通道。
+
+**通道 1：SSH（最接近「直连」，不需要代理）**
+
+`github.com:22` 与 `ssh.github.com:443` 实测都能完成 SSH 握手，主机密钥指纹与 GitHub 官方
+`api.github.com/meta` 公布值逐项一致（RSA / ECDSA / ED25519 三型均核对通过）。本机目前
+**没有 `~/.ssh`**，先生成密钥并把公钥加到 GitHub 账号即可：
+
+```bash
+ssh-keygen -t ed25519 -C "你的邮箱"        # 本机尚无 ~/.ssh，先生成
+cat ~/.ssh/id_ed25519.pub                 # 内容贴到 GitHub → Settings → SSH and GPG keys
+ssh -T git@github.com                     # 出现 "Hi <用户名>!" 即通
+git remote set-url origin git@github.com:Gitsnod/WallDesk.git
+```
+
+22 端口被网络设备拦截时改走 443，在 `~/.ssh/config` 里写：
+
+```
+Host github.com
+  HostName ssh.github.com
+  Port 443
+  User git
+```
+
+**通道 2：HTTPS REST API（技能 `github-via-api` 与 `gh` 都走这里）**
+
+`api.github.com` 通，因此不碰 `github.com` 也能完成绝大部分开发操作——推送提交、同步标签、
+发 Release、上传资产（走 `uploads.github.com`）：
 
 ```bash
 S="$HOME/.workbuddy/skills/github-via-api/scripts/github_via_api.py"
@@ -220,17 +217,40 @@ S="$HOME/.workbuddy/skills/github-via-api/scripts/github_via_api.py"
 python "$S" status                            # 看本地 / 远端差多少（只读）
 python "$S" push --dry-run                    # 演练：只列出待推送提交
 python "$S" push                              # 推送；结束后自动逐文件核对远端树
-python "$S" tags v4.8.0                       # 同步标签
-python "$S" release --tag v4.8.0 --title "WallDesk v4.8.0" \
-       --notes-file tools/release-notes-v4.8.0.md \
-       --asset dist/WallDesk-4.8.0-setup.exe \
-       --asset dist/WallDesk-4.8.0-win64.zip
+python "$S" tags v4.9.0                       # 同步标签
+python "$S" release --tag v4.9.0 --title "WallDesk v4.9.0" \
+       --notes-file tools/release-notes-v4.9.0.md \
+       --asset dist/WallDesk-4.9.0-setup.exe \
+       --asset dist/WallDesk-4.9.0-win64.zip
 ```
 
 令牌由脚本自动从 `git credential-manager get` 取。
 **不要用 `git credential fill`** —— 在 Git Bash 里它会挂住等交互输入。
 
-三条要点：
+`gh` 已装在本机（`%LOCALAPPDATA%\Programs\GitHubCLI\bin\gh.exe`，用户级，未用管理员权限），
+令牌由 `~/.bashrc` 从 Windows 凭据管理器现取注入 `GH_TOKEN`，不落盘明文；
+`gh auth status` 显示 `Logged in to github.com account Gitsnod (GH_TOKEN)`。
+**`gh auth login` 的设备码流程走 `github.com/login/device`，在本机不通**，只能用 `GH_TOKEN`；
+现有令牌 scope 为 `gist, repo, workflow`，缺 `read:org`（补 scope 需到网页重新授权）。
+
+**通道 3：代理**
+
+拦截按目标主机名判定，因此**走代理可行**：域名留在加密隧道内，本机策略看不到目标主机名即可放行。
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:端口                # 对 curl / git / gh 同时生效
+git config --global http.proxy http://127.0.0.1:端口    # 只对 git 生效
+```
+
+`gh` 与 `git` 均遵循 `HTTPS_PROXY`（已实测：把该变量指向一个空端口，`gh api` 立刻报
+`proxyconnect tcp ... refused`，证明变量确实被采用）。两点注意：
+
+- 本机**当前没有安装任何代理客户端**（WinINET 系统代理为关闭、常见代理端口无监听、
+  无 Clash / v2ray 一类进程），要用代理需先自行部署一个可用的代理服务；
+- 有了通道 1，代理对 git 操作已非必需，只在需要访问网页版 GitHub
+  （看 Issue、网页发 Release、`gh auth login` 设备码）时才有必要。
+
+### 推树通道的三条要点
 
 - **推树必须全量**，绝不能传 `base_tree`。曾以「远端父提交的树」为 base、再叠加本地
   `diff-tree` 的清单，两者语义不匹配，结果把远端 `main` 推成只剩 6 个条目（事故级）。
@@ -319,12 +339,14 @@ WallpaperDesk/
 - **看护与恢复**：电源广播/锁屏/显示器变更监听 + 自适应看门狗；重挂前记录播放位置续播
 - **省电**：锁屏、电池、全屏应用三种策略暂停，与用户手动暂停语义分开，互不干扰
 
-## 九、版本变更
+## 九、版本历史
+
+顶部只展开当前版本的重点；下表按版本倒序给出各版本的主要变更（技术视角）。
 
 | 版本 | 主要变更 |
 |------|----------|
 | **4.8.0** | 在线下载按内容（SHA-256，先比大小预筛）查重，命中即复用，不再堆同图副本（此前 `downloads/` 14 个文件仅 10 份唯一内容，白占 14.2 MiB）；下载文件改可读命名（`bing_<图源日期>_<图片名>.jpg` / `域名_原文件名` / 无原名时 `域名_短哈希`，原为 `wall_<url哈希>`）；Bing 每日一图增加下载前命名预检，已存在则连请求都不发；壁纸库页四行九按钮收成一条操作行 + 「更多」溢出菜单；设置页 12 组单列改为左侧二级导航（壁纸 / 播放 / 场景 / 外观与效果 / 高级）并持久化最后所在子页；补齐设置页「场景预设」缺失的保存按钮 |
-| **4.7.0** | 新增场景预设（`PresetManager`，JSON 存 `presets.json`，壁纸库页 / 设置页 / 托盘三处入口）；播放历史持久化，并修复「随机不重复」在自动切换下退化失效的真实缺陷（统一走 `nextIndexByPolicy()`）；新增在线图源（`OnlineSources`：URL 导入 + Bing 每日一图，带大小上限与非法地址拦截）；新增按分辨率 / 朝向分组筛选与排序（`MediaInfo`，只读文件头 + 缓存）；视频壁纸支持驱动桌面频谱（音量 > 0 时建立音频链路，`VlcPlayer::play` 增加 `muteOutput` 参数走 `:no-audio` 省电路径） |
+| **4.7.0** | 新增场景预设（`PresetManager`，JSON 存 `presets.json`，一个预设打包壁纸 + 填充方式 + 画面效果 + 桌面挂件 + 自动切换策略 + 逐屏配置，壁纸库页 / 设置页 / 托盘三处入口）；播放历史持久化，并修复「随机不重复」在自动切换下退化失效的真实缺陷（统一走 `nextIndexByPolicy()`）；新增在线图源（`OnlineSources`：URL 导入 + Bing 每日一图，带大小上限与非法地址拦截）；新增按分辨率 / 朝向分组筛选与排序（`MediaInfo`，只读文件头 + 缓存）；视频壁纸支持驱动桌面频谱（音量 > 0 时建立音频链路，`VlcPlayer::play` 增加 `muteOutput` 参数走 `:no-audio` 省电路径） |
 | **4.6.1** | 修复加载配置时被默认值覆盖的根因缺陷（恢复开关、锁屏暂停、视频缩略图等默认开启项曾被误关）——引入加载期禁写守卫并为各开关接入即时落盘；画面效果新增「重置效果」按钮；桌面挂件改为圆角半透明卡片 + 文字阴影 + 日期高亮；修复克隆 / 镜像模式下逐屏壁纸显示器重复列出的问题；壁纸库操作区（库管理 + 播放控制）合并为同一行 |
 | **4.6.0** | 删除顶部工具条，库管理与播放控制收进「设置 → 操作」；删除左侧「工具」导航，其功能并入设置页（外观主题、数据目录 / 日志、关于、退出）；修复「启动时恢复上次壁纸」失效；新增多屏独立壁纸（`IDesktopWallpaper` 逐屏设置）；新增画面效果（亮度 / 对比度 / 饱和度 / 模糊 / 暗角 / 黑白）；新增桌面挂件（时钟 / 日历 / 自定义文字）与音乐可视化（WASAPI 回环 + FFT 频谱）；新增切换策略（顺序 / 随机 / 随机不重复，范围可限定图片 / 视频 / 收藏）与定时场景；壁纸库新增搜索、过滤、收藏；导航改为「壁纸库 / 设置 / 多屏」 |
 | 4.5.0 | 修复缩放窗口时缩略图忽大忽小（改为固定单元格 + 设置项 小/中/大）；新增视频缩略图（libVLC 抓帧，串行队列，失败降级占位图 + 播放角标）；画廊改自定义委托自绘（圆角卡片、悬停/选中态、文件名）；页头与空库引导；内存优化（列表项不再持有 QPixmap、内存 LRU 上限 180 张、仅可见区域加载、抓帧串行化） |
