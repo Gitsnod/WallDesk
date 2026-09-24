@@ -228,6 +228,32 @@ def verify_remote_tree(token, tree_sha, expected):
     return (not problems and not res.get("truncated")), problems
 
 
+def load_sha_map():
+    """本地提交 SHA -> 远端重放 SHA。
+
+    Git Data API 重放出来的提交与本地是不通对象，SHA 必然不同。一旦推过一轮，
+    远端 HEAD 就不在本地历史里了，再想推新提交必须知道「哪个本地提交对应远端
+    HEAD」。这个映射由 push_tags_via_api.py 同步维护在同一文件里。
+    """
+    p = os.path.join(ROOT, "tools", "remote_sha_map.json")
+    if os.path.isfile(p):
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def find_mapped_local(remote_head, mapping):
+    """由远端 HEAD 反查它对应的本地提交 SHA。"""
+    for local_sha, remote_sha in mapping.items():
+        if remote_sha == remote_head or remote_sha.startswith(remote_head) \
+                or remote_head.startswith(remote_sha):
+            return local_sha
+    return None
+
+
 def main():
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     dry = "--dry-run" in sys.argv
@@ -267,10 +293,30 @@ def main():
         print("远端已包含本地提交，无需推送。")
         return 0
 
+    # 远端 HEAD 不在本地历史时，尝试用映射把它翻译回本地 SHA
+    mapping = load_sha_map()
+    base = remote_head
     try:
-        pending = sh("rev-list", "--reverse", f"{remote_head}..{local_head}").splitlines()
+        sh("cat-file", "-e", f"{remote_head}^{{commit}}")
+        base_is_local = True
     except subprocess.CalledProcessError:
-        print("[错误] 远端 HEAD 不在本地历史中，需人工处理（本脚本不重写历史）",
+        base_is_local = False
+
+    if not base_is_local:
+        mapped = find_mapped_local(remote_head, mapping)
+        if not mapped:
+            print(f"[错误] 远端 HEAD {remote_head[:7]} 不在本地历史中，且 "
+                  f"tools/remote_sha_map.json 里没有它的映射。\n"
+                  f"       请在映射文件里补一条 {{\"<本地提交>\": \"{remote_head}\"}} 后重试。",
+                  file=sys.stderr)
+            return 1
+        print(f"远端 HEAD 是重放对象，按映射等价于本地 {mapped[:7]}")
+        base = mapped
+
+    try:
+        pending = sh("rev-list", "--reverse", f"{base}..{local_head}").splitlines()
+    except subprocess.CalledProcessError:
+        print("[错误] 无法计算待推送提交，需人工处理（本脚本不重写历史）",
               file=sys.stderr)
         return 1
     print(f"待推送提交数：{len(pending)}")
@@ -283,6 +329,7 @@ def main():
 
     cache = {}
     parent_sha = remote_head
+    new_map = dict(mapping)
     for i, c in enumerate(pending, 1):
         tree_sha, nfiles = build_full_tree(token, c, cache)
         msg = sh("log", "-1", "--pretty=%B", c).strip() or "update"
@@ -295,6 +342,7 @@ def main():
             print(f"[错误] 创建提交 {c[:7]} 失败（HTTP {st}）：{commit}",
                   file=sys.stderr)
             return 1
+        new_map[c] = commit["sha"]
         print(f"  [{i}/{len(pending)}] {c[:7]} -> {commit['sha'][:7]}"
               f"  (tree {tree_sha[:7]}, {nfiles} 文件)")
         parent_sha = commit["sha"]
@@ -322,6 +370,12 @@ def main():
               f"\n  PATCH /repos/{REPO}/git/refs/heads/{BRANCH} "
               f'{{"sha":"{remote_head}","force":true}}')
         return 1
+
+    # 维护映射文件，供下次 push / 标签同步使用
+    map_path = os.path.join(ROOT, "tools", "remote_sha_map.json")
+    with open(map_path, "w", encoding="utf-8") as f:
+        json.dump(new_map, f, ensure_ascii=False, indent=2, sort_keys=True)
+    print(f"已更新 {os.path.relpath(map_path, ROOT)}（{len(new_map)} 条映射）")
 
     print(f"\n本地 HEAD {local_head[:7]} / 远端 HEAD {parent_sha[:7]}"
           f"（Git Data API 重放，SHA 与本地不同属正常）")
