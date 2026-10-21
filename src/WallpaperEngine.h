@@ -115,6 +115,9 @@ public:
 
     /** 离线抓帧（生成缩略图用），不干扰正在播放的画面。 */
     bool snapshotVideo(const QString& file, const QString& outPng, int width, int height);
+    /** 离线连续抓帧（图库悬停预览用）：同一实例内按间隔取 count 帧，返回 png 路径。 */
+    QStringList snapshotVideoSeries(const QString& file, const QString& outDir,
+                                    int width, int height, int count, int intervalMs);
 
     /** 重新挂载宿主窗口并从上次位置继续播放。返回是否成功。 */
     bool reattach();

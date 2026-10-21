@@ -469,10 +469,48 @@ qint64 VlcPlayer::length() const
 
 bool VlcPlayer::takeSnapshot(const QString& file, const QString& outPng, int width, int height)
 {
+    return snapshotFrames(file, width, height, QStringList{outPng}, QList<int>{400});
+}
+
+QStringList VlcPlayer::takeSnapshotSeries(const QString& file, const QString& outDir,
+                                          int width, int height, int count, int intervalMs)
+{
+    QStringList outFiles;
+    if (count <= 0) {
+        return outFiles;
+    }
+    // 文件名固定：同一张卡片重复悬停时直接覆盖，不在临时目录里堆文件
+    for (int i = 0; i < count; ++i) {
+        outFiles << outDir + QStringLiteral("/preview_%1.png").arg(i, 2, 10, QLatin1Char('0'));
+    }
+    QList<int> waits;
+    for (int i = 0; i < count; ++i) {
+        // 首帧给足时间（seek 后解码器要先吐出画面），后续按间隔取
+        waits << (i == 0 ? 300 : qBound(80, intervalMs, 1000));
+    }
+    snapshotFrames(file, width, height, outFiles, waits);
+
+    QStringList produced;
+    for (const QString& path : outFiles) {
+        if (QFileInfo::exists(path)) {
+            produced << path;
+        }
+    }
+    return produced;
+}
+
+bool VlcPlayer::snapshotFrames(const QString& file, int width, int height,
+                               const QStringList& outFiles, const QList<int>& waitsMs)
+{
     if (!m_dll || !libvlc_video_take_snapshot_ || !QFileInfo::exists(file)) {
         return false;
     }
-    QFile::remove(outPng);
+    if (outFiles.isEmpty() || outFiles.size() != waitsMs.size()) {
+        return false;
+    }
+    for (const QString& path : outFiles) {
+        QFile::remove(path);
+    }
 
     // 独立实例：绝不影响正在播放的壁纸（主实例参数与播放状态都不动）
     QStringList args = instanceArguments();
@@ -500,7 +538,7 @@ bool VlcPlayer::takeSnapshot(const QString& file, const QString& outPng, int wid
         return false;
     }
 
-    bool ok = false;
+    int produced = 0;
     // 宿主窗口：系统预定义 STATIC 类，隐藏即可，只为给 vout 一个渲染目标
     HWND host = CreateWindowExW(0, L"STATIC", L"WallDeskSnapshot", WS_POPUP, 0, 0,
                                 width, height, nullptr, nullptr, nullptr, nullptr);
@@ -534,10 +572,22 @@ bool VlcPlayer::takeSnapshot(const QString& file, const QString& outPng, int wid
                 }
                 pumpMessages(400);
 
-                const QByteArray target = QDir::toNativeSeparators(outPng).toUtf8();
-                ok = libvlc_video_take_snapshot_(player, 0, target.constData(),
-                                                 static_cast<unsigned>(width),
-                                                 static_cast<unsigned>(height)) == 0;
+                for (int i = 0; i < outFiles.size(); ++i) {
+                    pumpMessages(waitsMs.at(i));
+                    const QByteArray target = QDir::toNativeSeparators(outFiles.at(i)).toUtf8();
+                    if (libvlc_video_take_snapshot_(player, 0, target.constData(),
+                                                    static_cast<unsigned>(width),
+                                                    static_cast<unsigned>(height)) != 0) {
+                        continue;
+                    }
+                    // 快照写盘是异步的，给最多 1 秒落盘时间
+                    for (int spin = 0; spin < 20 && !QFileInfo::exists(outFiles.at(i)); ++spin) {
+                        pumpMessages(50);
+                    }
+                    if (QFileInfo::exists(outFiles.at(i))) {
+                        ++produced;
+                    }
+                }
             }
             libvlc_media_player_stop_(player);
             libvlc_media_player_release_(player);
@@ -548,7 +598,7 @@ bool VlcPlayer::takeSnapshot(const QString& file, const QString& outPng, int wid
     }
 
     libvlc_release_(instance);
-    return ok && QFileInfo::exists(outPng);
+    return produced > 0;
 }
 
 void VlcPlayer::release()

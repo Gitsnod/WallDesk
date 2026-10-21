@@ -8,18 +8,15 @@
 > 已发布：<https://github.com/Gitsnod/WallDesk> —— 安装程序与绿色版见
 > [Releases](https://github.com/Gitsnod/WallDesk/releases)。
 
-**当前版本：4.9.0**。这一版把「资源占用」从口号变成可调的规则：暂停不再互相打架，
-可以按程序决定壁纸去留，也能在某个程序进入前台时自动换一套桌面。
+**当前版本：4.10.0**。壁纸库从「静态缩略图」变成能看动的东西：视频卡片悬停即预览，
+不用先应用到桌面才知道这段视频合不合适。
 
-1. **暂停不再互相撤销（缺陷修复）**：以前锁屏 / 电池 / 全屏三路各改各的状态，退出全屏会把
-   「电池供电」仍需要的暂停一并解掉。现在所有暂停原因（手动 / 锁屏 / 电池 / 全屏 / 远程会话 /
-   逐应用规则）统一合成，任一成立就保持暂停，设置页写明当前生效的原因。
-2. **逐应用规则**：设置 → 播放 → 资源控制。按前台进程决定壁纸去留——「暂停」= 该程序在前台时
-   停掉壁纸，「忽略」= 该程序全屏时继续播放；同一进程只保留一条，双击切换动作。
-3. **触发规则**：设置 → 场景 → 触发规则。指定程序进入前台时自动套用某个场景预设，
-   切到游戏自动换成另一套桌面，不用手动点。
-4. **远程桌面暂停**：被远程控制时暂停壁纸，断开后恢复；默认开启。
-5. **解码档位可查**：日志记录所选档位实际下发的 libVLC 参数，并新增「省电（限制解码线程）」档。
+1. **卡片悬停动态预览**：鼠标在视频卡片上停留约半秒，卡片内循环播放一小段画面（约 5 fps），
+   移开即停。预览由**独立的离线实例**抓帧，不碰正在播放的壁纸；关掉之后不会再有额外解码开销。
+2. **抓帧实现合并**：缩略图与预览共用一套离线抓帧代码，一次实例可连取多帧，
+   不再按帧数重复初始化 libVLC；单帧缩略图的行为与耗时不变（仍走磁盘缓存）。
+3. **预览可关、缓存有界**：设置 → 播放 → 资源控制 新增「悬停卡片时播放动态预览」（默认开）；
+   内存里最多保留 6 组帧（约 3 MB），超出淘汰最旧的一组，移开后回来仍能立刻播放。
 
 各版本的功能亮点与修复明细统一收录在 [CHANGELOG.md](CHANGELOG.md)，本节只展开当前版本。
 
@@ -108,7 +105,7 @@ Qt 套件与编译器必须同为 64 位，否则链接报 `LNK1112`。
 build.bat release
 ```
 
-产物：`dist\WallDesk-4.9.0-win64.zip`（约 25–60 MB，取决于是否内嵌 VLC）。
+产物：`dist\WallDesk-4.10.0-win64.zip`（约 25–60 MB，取决于是否内嵌 VLC）。
 用户解压即运行，无需安装 Qt / VLC / 运行时库。包内含：
 
 - `WallDesk.exe` + Qt 运行时 DLL（windeployqt 部署）
@@ -118,11 +115,11 @@ build.bat release
 
 ### 形态 2：安装程序（给非技术用户）
 
-1. 先执行形态 1 生成 `dist\WallDesk-4.9.0-win64\` 目录
+1. 先执行形态 1 生成 `dist\WallDesk-4.10.0-win64\` 目录
 2. 安装 [Inno Setup 6](https://jrsoftware.org/isdl.php)（免费，约 5 MB）
 3. 命令行执行 `iscc installer\WallDesk.iss`，或在 Inno 里打开该脚本按 F9
 
-产物：`dist\WallDesk-4.9.0-setup.exe`。安装到用户目录（无需管理员权限），
+产物：`dist\WallDesk-4.10.0-setup.exe`。安装到用户目录（无需管理员权限），
 提供桌面图标、开始菜单、可选开机自启、完整卸载。
 
 ### 形态 3：单文件 exe（内嵌 VLC 时）
@@ -155,7 +152,7 @@ git push origin v4.8.0
 Release 可在网页上 **Releases → Draft a new release** 发起，也可用 GitHub CLI：
 
 ```bash
-gh release create v4.8.0 dist/WallDesk-4.9.0-setup.exe dist/WallDesk-4.9.0-win64.zip \
+gh release create v4.10.0 dist/WallDesk-4.10.0-setup.exe dist/WallDesk-4.10.0-win64.zip \
   --title "WallDesk 4.8.0" --notes-file tools/release-notes-v4.8.0.md
 ```
 
@@ -212,11 +209,11 @@ S="$HOME/.workbuddy/skills/github-via-api/scripts/github_via_api.py"
 python "$S" status                            # 看本地 / 远端差多少（只读）
 python "$S" push --dry-run                    # 演练：只列出待推送提交
 python "$S" push                              # 推送；结束后自动逐文件核对远端树
-python "$S" tags v4.9.0                       # 同步标签
-python "$S" release --tag v4.9.0 --title "WallDesk v4.9.0" \
-       --notes-file tools/release-notes-v4.9.0.md \
-       --asset dist/WallDesk-4.9.0-setup.exe \
-       --asset dist/WallDesk-4.9.0-win64.zip
+python "$S" tags v4.10.0                       # 同步标签
+python "$S" release --tag v4.10.0 --title "WallDesk v4.10.0" \
+       --notes-file tools/release-notes-v4.10.0.md \
+       --asset dist/WallDesk-4.10.0-setup.exe \
+       --asset dist/WallDesk-4.10.0-win64.zip
 ```
 
 令牌由脚本自动从 `git credential-manager get` 取。
@@ -337,7 +334,7 @@ WallpaperDesk/
 
 ## 九、版本历史
 
-当前版本 **4.9.0**（2026-10-21 发布）。完整的变更记录见仓库根目录的
+当前版本 **4.10.0**（2026-10-21 发布）。完整的变更记录见仓库根目录的
 [CHANGELOG.md](CHANGELOG.md)：每个版本独立一节、按变更类型（新增 / 变更 / 弃用 / 移除 /
 修复 / 安全）分组、并标注发布日期。
 
@@ -345,7 +342,8 @@ WallpaperDesk/
 版本号遵循[语义化版本 2.0.0](https://semver.org/lang/zh-CN/spec/v2.0.0.html)。
 
 已发布版本：4.0.0 → 4.1.0 → 4.2.0 → 4.2.1 → 4.3.0 → 4.4.0 → 4.5.0 → 4.6.0 → 4.6.1 →
-4.7.0 → 4.8.0 → 4.9.0，各自的安装包与绿色版见 [Releases](https://github.com/Gitsnod/WallDesk/releases)。
+4.7.0 → 4.8.0 → 4.9.0 → 4.10.0，各自的安装包与绿色版见
+[Releases](https://github.com/Gitsnod/WallDesk/releases)。
 
 V1–V3 是 4.0.0 之前、公开发布前的开发里程碑，未按语义化版本编号，也没有留存发行产物，
 已在 CHANGELOG.md 末尾单独说明。

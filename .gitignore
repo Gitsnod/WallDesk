@@ -45,3 +45,4 @@ _final_*.bat
 _probe*.bat
 _ps.bat
 *_log.txt
+build-note.log

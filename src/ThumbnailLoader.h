@@ -1,11 +1,14 @@
 #pragma once
 
 #include <QCache>
+#include <QHash>
 #include <QImage>
+#include <QList>
 #include <QObject>
 #include <QPixmap>
 #include <QSet>
 #include <QSize>
+#include <QStringList>
 #include <functional>
 
 class QThreadPool;
@@ -36,6 +39,20 @@ public:
     /** 注入视频抓帧实现；签名：文件路径 + 目标尺寸 → 图像。 */
     void setVideoGrabber(std::function<QImage(const QString&, const QSize&)> grabber);
 
+    /**
+     * 注入「连续抓帧」实现（V4.10 悬停动态预览）：
+     * 文件路径 + 目标尺寸 + 帧数 → 帧序列。实现方应在**同一个**离线实例内取完，
+     * 否则每帧各起一个 libvlc 实例会把开销放大数倍。
+     */
+    void setPreviewGrabber(std::function<QList<QImage>(const QString&, const QSize&, int)> grabber);
+
+    /** 请求某视频的预览帧序列（走串行视频池，同一路径只排队一次）。 */
+    void requestPreview(const QString& path, const QSize& size, int count);
+    /** 取已生成的预览帧；未生成返回 false。 */
+    bool previewFrames(const QString& path, QList<QImage>* out) const;
+    /** 放弃在途预览任务（切换图库时调用）。 */
+    void clearPreviewPending();
+
     /** 同步查询磁盘缓存。命中返回图像，未命中返回空图像。 */
     QImage cached(const QString& path, const QSize& size) const;
     /** 查询内存 LRU。命中写入 out 并返回 true；不命中返回 false（调用方应发请求）。 */
@@ -56,14 +73,21 @@ public:
 
     /** 供工作线程回传结果，内部使用。 */
     void deliver(const QString& path, const QImage& image);
+    /** 供工作线程回传预览帧，内部使用。 */
+    void deliverPreview(const QString& path, const QList<QImage>& frames);
 
 signals:
     void ready(const QString& path, const QImage& image);
+    void previewReady(const QString& path);
 
 private:
     QThreadPool* m_pool = nullptr;      // 图片解码：2 线程
     QThreadPool* m_videoPool = nullptr; // 视频抓帧：串行
     std::function<QImage(const QString&, const QSize&)> m_grabber;
+    std::function<QList<QImage>(const QString&, const QSize&, int)> m_previewGrabber;
     QSet<QString> m_pending;
     QCache<QString, QPixmap> m_memory;
+    QHash<QString, QList<QImage>> m_previews; // 预览帧（仅内存，随悬停命中率淘汰）
+    QStringList m_previewOrder;              // 插入顺序，用于淘汰最旧的一组
+    QSet<QString> m_previewPending;
 };

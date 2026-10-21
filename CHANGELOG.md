@@ -10,6 +10,24 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.10.0] - 2026-10-21
+
+### 新增（Added）
+
+- **壁纸库视频卡片悬停动态预览**：鼠标在视频卡片上停留约 0.45 秒后，卡片内循环播放一小段画面
+  （一次抓 8 帧、约 5 fps），移开即停。抓帧走独立的离线 libVLC 实例，不影响正在播放的壁纸；
+  切换卡片只重绘该格，不整表刷新。
+- **预览开关**：设置 → 播放 → 资源控制 新增「悬停卡片时播放动态预览」，默认开启。
+
+### 变更（Changed）
+
+- **离线抓帧实现合并**：`VlcPlayer` 新增 `takeSnapshotSeries()`，在同一个实例里按间隔连取多帧，
+  单帧缩略图（`takeSnapshot()`）改为复用同一实现。原先每帧各起一个实例，8 帧就要初始化 8 次 libVLC。
+- **预览帧缓存有界**：内存里最多保留 6 组预览帧（每组 8 帧，合计约 3 MB），超出淘汰最旧的一组；
+  清空缩略图内存时一并清空。同一路径重复悬停只抓一次。
+- **悬停识别双通道**：除 `QListWidget::itemEntered` 外，另在视口上按鼠标位置判定，
+  避免指针"跳着"进入卡片（如程序化移动）时不触发。
+
 ## [4.9.0] - 2026-10-21
 
 ### 新增（Added）
@@ -231,7 +249,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.9.0...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.10.0...HEAD
+[4.10.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.10.0
 [4.9.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.9.0
 [4.8.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.8.0
 [4.7.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.7.0

@@ -25,6 +25,7 @@ class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QListWidgetItem;
 class QMenu;
 class QProgressBar;
 class QPushButton;
@@ -42,6 +43,13 @@ struct MediaItem {
     bool favorite = false; // 收藏（V4.6）
     qint64 added = 0;      // 加入库的时间戳（毫秒），用于排序
     bool online = false;   // 来自在线下载（V4.7），用于「在线」筛选
+};
+
+/** 图库卡片悬停动态预览的共享状态：主窗口写，自绘委托只读（V4.10）。 */
+struct HoverPreviewState {
+    QString path;        // 当前悬停的视频路径；空表示没有预览
+    QList<QImage> frames; // 已抓到的帧序列
+    int index = 0;        // 正在显示第几帧
 };
 
 /**
@@ -69,6 +77,8 @@ public:
 protected:
     void closeEvent(QCloseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    /** 图库视口的鼠标移动/离开：驱动悬停预览（不依赖 itemEntered 的时序）。 */
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void onAddImages();
@@ -88,6 +98,14 @@ private slots:
     void onSessionLock(bool locked);
     void onDisplayChanged();
     void onPowerStatusChanged();
+
+    // 图库悬停预览（V4.10）
+    void onGalleryItemEntered(QListWidgetItem* item);
+    void handleGalleryHoverAt(const QPoint& pos);
+    void onHoverDelayTimeout();
+    void onPreviewReady(const QString& path);
+    void onHoverFrameTick();
+    void stopHoverPreview();
     void onFullscreenChanged(bool active);
     /** 远程桌面连接 / 断开（V4.9）。 */
     void onRemoteSessionChanged(bool connected);
@@ -362,6 +380,17 @@ private:
     QTimer* m_triggerTimer = nullptr;
     QList<QPair<QString, QString>> m_triggers; // 可执行文件名 → 预设名
     QString m_lastForegroundExe;               // 用于只在「切换前台程序」时判定一次
+
+    // ---- V4.10：图库悬停动态预览 ----
+    QCheckBox* m_hoverPreviewEnabled = nullptr;
+    QTimer* m_hoverDelay = nullptr; // 悬停稳定判定（避免扫过卡片就起实例）
+    QTimer* m_hoverAnim = nullptr;  // 帧切换
+    HoverPreviewState m_hoverPreview;
+    QString m_hoverPendingPath;     // 已请求、尚未拿到帧的路径
+    int m_hoverRow = -1;            // 正在预览的行号
+    /** 只重绘悬停卡片所在矩形，避免整表刷新。 */
+    void repaintHoverRow();
+
     bool m_backendReady = false;
     ThemeKind m_theme = ThemeKind::System;
 };

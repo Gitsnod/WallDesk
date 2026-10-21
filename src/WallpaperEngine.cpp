@@ -791,6 +791,15 @@ bool WallpaperEngine::snapshotVideo(const QString& file, const QString& outPng, 
     return m_vlc.takeSnapshot(file, outPng, width, height);
 }
 
+QStringList WallpaperEngine::snapshotVideoSeries(const QString& file, const QString& outDir,
+                                                 int width, int height, int count, int intervalMs)
+{
+    if (!m_vlc.isLoaded()) {
+        return QStringList();
+    }
+    return m_vlc.takeSnapshotSeries(file, outDir, width, height, count, intervalMs);
+}
+
 QStringList WallpaperEngine::performanceArguments() const
 {
     // 只取档位相关的参数：公共参数（缓存、日志级别等）与本项诊断无关，

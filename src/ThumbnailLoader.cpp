@@ -31,6 +31,9 @@ constexpr int kTrimCheckEvery = 50;
 /** 内存 LRU 上限（张数）。160x100 的 ARGB 图约 64 KB，180 张约 11 MB。 */
 constexpr int kMaxMemoryThumbs = 180;
 
+/** 预览帧组上限：每组 8 帧 160x100，6 组约 3 MB。超出淘汰最旧的一组。 */
+constexpr int kMaxPreviewSets = 6;
+
 std::atomic<int> gSaveCounter{0};
 
 QString hashKey(const QString& path, const QSize& size)
@@ -156,6 +159,44 @@ private:
     std::function<QImage(const QString&, const QSize&)> m_grabber;
 };
 
+/** 预览帧序列任务：与缩略图共用串行视频池，保证同一时刻只有一个离线实例。 */
+class PreviewTask : public QRunnable {
+public:
+    PreviewTask(QString path, QSize size, int count, QPointer<ThumbnailLoader> owner,
+                std::function<QList<QImage>(const QString&, const QSize&, int)> grabber)
+        : m_path(std::move(path))
+        , m_size(size)
+        , m_count(count)
+        , m_owner(owner)
+        , m_grabber(std::move(grabber))
+    {
+    }
+
+    void run() override
+    {
+        QList<QImage> frames;
+        if (m_grabber && m_count > 0) {
+            frames = m_grabber(m_path, m_size, m_count);
+        }
+        if (m_owner.isNull()) {
+            return;
+        }
+        const QString path = m_path;
+        QMetaObject::invokeMethod(m_owner.data(), [owner = m_owner, path, frames]() {
+            if (!owner.isNull()) {
+                owner->deliverPreview(path, frames);
+            }
+        }, Qt::QueuedConnection);
+    }
+
+private:
+    QString m_path;
+    QSize m_size;
+    int m_count = 0;
+    QPointer<ThumbnailLoader> m_owner;
+    std::function<QList<QImage>(const QString&, const QSize&, int)> m_grabber;
+};
+
 } // namespace
 
 ThumbnailLoader::ThumbnailLoader(QObject* parent)
@@ -181,6 +222,57 @@ ThumbnailLoader::~ThumbnailLoader()
 void ThumbnailLoader::setVideoGrabber(std::function<QImage(const QString&, const QSize&)> grabber)
 {
     m_grabber = std::move(grabber);
+}
+
+void ThumbnailLoader::setPreviewGrabber(
+    std::function<QList<QImage>(const QString&, const QSize&, int)> grabber)
+{
+    m_previewGrabber = std::move(grabber);
+}
+
+void ThumbnailLoader::requestPreview(const QString& path, const QSize& size, int count)
+{
+    if (path.isEmpty() || count <= 0 || !m_previewGrabber) {
+        return;
+    }
+    if (m_previews.contains(path) || m_previewPending.contains(path)) {
+        return;
+    }
+    m_previewPending.insert(path);
+    auto* task = new PreviewTask(path, size, count, QPointer<ThumbnailLoader>(this), m_previewGrabber);
+    m_videoPool->start(task);
+}
+
+bool ThumbnailLoader::previewFrames(const QString& path, QList<QImage>* out) const
+{
+    if (!out) {
+        return false;
+    }
+    const auto it = m_previews.constFind(path);
+    if (it == m_previews.constEnd() || it.value().isEmpty()) {
+        return false;
+    }
+    *out = it.value();
+    return true;
+}
+
+void ThumbnailLoader::clearPreviewPending()
+{
+    m_previewPending.clear();
+}
+
+void ThumbnailLoader::deliverPreview(const QString& path, const QList<QImage>& frames)
+{
+    m_previewPending.remove(path);
+    if (frames.isEmpty()) {
+        return;
+    }
+    while (m_previewOrder.size() >= kMaxPreviewSets) {
+        m_previews.remove(m_previewOrder.takeFirst());
+    }
+    m_previews.insert(path, frames);
+    m_previewOrder.append(path);
+    emit previewReady(path);
 }
 
 QString ThumbnailLoader::cacheDir()
@@ -245,6 +337,8 @@ void ThumbnailLoader::clearPending()
 void ThumbnailLoader::clearMemory()
 {
     m_memory.clear();
+    m_previews.clear();
+    m_previewOrder.clear();
 }
 
 void ThumbnailLoader::deliver(const QString& path, const QImage& image)

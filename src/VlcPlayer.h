@@ -117,6 +117,14 @@ public:
      */
     bool takeSnapshot(const QString& file, const QString& outPng, int width, int height);
 
+    /**
+     * 连续抓帧（V4.10）：在**同一个**离线实例里按间隔抓 count 帧，供图库卡片做悬停动态预览。
+     * 每个实例只新建一次，因此一帧序列的开销约等于「一次缩略图抓帧 + N 次间隔」，
+     * 远低于逐帧各起一个实例。返回实际生成的 png 路径（按顺序），失败返回空。
+     */
+    QStringList takeSnapshotSeries(const QString& file, const QString& outDir,
+                                   int width, int height, int count, int intervalMs);
+
     void release();
 
     /**
@@ -133,6 +141,9 @@ private:
     bool bindAll();
     bool createInstance();
     QStringList instanceArguments() const;
+    /** 独立实例内按 outFiles 顺序抓帧，waitsMs 为每帧前的等待毫秒数。 */
+    bool snapshotFrames(const QString& file, int width, int height,
+                        const QStringList& outFiles, const QList<int>& waitsMs);
 
     HMODULE m_dll = nullptr;
     HMODULE m_coreDll = nullptr; // libvlccore.dll（显式目录加载时先行载入，见 cpp 注释）

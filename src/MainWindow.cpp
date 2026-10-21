@@ -44,6 +44,8 @@
 #include <QListWidget>
 #include <QListView>
 #include <QMenu>
+#include <QMouseEvent>
+#include <QScrollBar>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPainter>
@@ -55,7 +57,6 @@
 #include <QRadioButton>
 #include <QRandomGenerator>
 #include <QScrollArea>
-#include <QScrollBar>
 #include <QSettings>
 #include <QSize>
 #include <QSlider>
@@ -141,10 +142,12 @@ QPixmap placeholderPixmap(const QSize& size, bool video)
  */
 class GalleryDelegate : public QStyledItemDelegate {
 public:
-    GalleryDelegate(QListWidget* view, ThumbnailLoader* thumbs, QObject* parent = nullptr)
+    GalleryDelegate(QListWidget* view, ThumbnailLoader* thumbs, const HoverPreviewState* preview,
+                    QObject* parent = nullptr)
         : QStyledItemDelegate(parent)
         , m_view(view)
         , m_thumbs(thumbs)
+        , m_preview(preview)
     {
     }
 
@@ -198,9 +201,19 @@ public:
             }
         }
 
+        // 悬停预览（V4.10）：命中当前悬停项时用抓到的帧序列覆盖静态缩略图
+        if (m_preview && !m_preview->frames.isEmpty() && m_preview->path == path) {
+            const int n = m_preview->frames.size();
+            const int i = ((m_preview->index % n) + n) % n;
+            const QImage& frame = m_preview->frames.at(i);
+            if (!frame.isNull()) {
+                pm = QPixmap::fromImage(frame.scaled(thumb.size(), Qt::KeepAspectRatioByExpanding,
+                                                     Qt::SmoothTransformation));
+            }
+        }
+
         QPainterPath clip;
-        clip.addRoundedRect(thumb, 8, 8);
-        painter->save();
+        clip.addRoundedRect(thumb, 8, 8);        painter->save();
         painter->setClipPath(clip);
         painter->drawPixmap(thumb, pm);
         painter->restore();
@@ -255,6 +268,7 @@ private:
 
     QListWidget* m_view = nullptr;
     ThumbnailLoader* m_thumbs = nullptr;
+    const HoverPreviewState* m_preview = nullptr;
 };
 
 } // namespace
@@ -791,7 +805,22 @@ QWidget* MainWindow::buildLibraryPage()
     m_list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_list->setIconSize(thumbSizeForIndex(kThumbDefaultIndex));
     m_list->setGridSize(gridSizeForThumb(thumbSizeForIndex(kThumbDefaultIndex)));
-    m_list->setItemDelegate(new GalleryDelegate(m_list, m_thumbs, m_list));
+    m_list->setItemDelegate(new GalleryDelegate(m_list, m_thumbs, &m_hoverPreview, m_list));
+    // 悬停动态预览（V4.10）：itemEntered 需要鼠标跟踪；离开卡片或视口时停掉
+    m_list->setMouseTracking(true);
+    m_list->viewport()->setMouseTracking(true);
+    connect(m_list, &QListWidget::itemEntered, this, &MainWindow::onGalleryItemEntered);
+    connect(m_list, &QAbstractItemView::viewportEntered, this, &MainWindow::stopHoverPreview);
+    // 兜底：程序化移动指针（自动化走查）不一定产生 itemEntered，直接看视口鼠标事件
+    m_list->viewport()->installEventFilter(this);
+
+    m_hoverDelay = new QTimer(this);
+    m_hoverDelay->setSingleShot(true);
+    m_hoverDelay->setInterval(450); // 扫过卡片不触发，停留才起离线实例
+    connect(m_hoverDelay, &QTimer::timeout, this, &MainWindow::onHoverDelayTimeout);
+    m_hoverAnim = new QTimer(this);
+    m_hoverAnim->setInterval(180); // 约 5.5 fps：够看出运动，又不必解整段视频
+    connect(m_hoverAnim, &QTimer::timeout, this, &MainWindow::onHoverFrameTick);
     m_list->setAttribute(Qt::WA_MacShowFocusRect, false);
     m_list->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_list, &QListWidget::itemDoubleClicked, this, [this]() { onApplySelected(); });
@@ -973,6 +1002,18 @@ QWidget* MainWindow::buildSettingsPage()
         "远程会话断开后自动恢复播放。"));
     connect(m_pauseOnRemote, &QCheckBox::toggled, this, [this](bool) { saveSettings(); });
     ruleLayout->addWidget(m_pauseOnRemote);
+
+    m_hoverPreviewEnabled = new QCheckBox(QStringLiteral("悬停卡片时播放动态预览"), ruleBox);
+    m_hoverPreviewEnabled->setToolTip(QStringLiteral(
+        "鼠标在视频卡片上停留约半秒后，在卡片内循环播放一小段画面。\n"
+        "预览用独立离线实例抓 8 帧，不干扰正在播放的壁纸；系统繁忙时会自动跳过。"));
+    connect(m_hoverPreviewEnabled, &QCheckBox::toggled, this, [this](bool on) {
+        if (!on) {
+            stopHoverPreview();
+        }
+        saveSettings();
+    });
+    ruleLayout->addWidget(m_hoverPreviewEnabled);
 
     m_appRulesEnabled = new QCheckBox(QStringLiteral("启用逐应用规则"), ruleBox);
     m_appRulesEnabled->setToolTip(QStringLiteral(
@@ -1333,7 +1374,7 @@ QWidget* MainWindow::buildSettingsPage()
     addPage(QStringLiteral("外观与效果"), {fxBox, widgetBox, audioBox, lookBox});
     addPage(QStringLiteral("高级"), {powerBox, miscBox});
 
-    const auto showPage = [this, scroll](int row) {
+    const auto showPage = [this, scroll, layout](int row) {
         if (row < 0 || row >= m_settingsPages.size()) {
             return;
         }
@@ -1606,6 +1647,9 @@ void MainWindow::loadSettings()
     if (m_appRulesEnabled) {
         m_appRulesEnabled->setChecked(s.value(QStringLiteral("appRulesEnabled"), false).toBool());
     }
+    if (m_hoverPreviewEnabled) {
+        m_hoverPreviewEnabled->setChecked(s.value(QStringLiteral("hoverPreview"), true).toBool());
+    }
     m_appRules.clear();
     // 用换行分隔的普通字符串存，而不是 QStringList：
     // QSettings 在注册表里对 QStringList 用的是 Qt 私有编码，手改/工具注入读不回来，
@@ -1827,6 +1871,9 @@ void MainWindow::saveSettings()
     if (m_appRulesEnabled) {
         s.setValue(QStringLiteral("appRulesEnabled"), m_appRulesEnabled->isChecked());
     }
+    if (m_hoverPreviewEnabled) {
+        s.setValue(QStringLiteral("hoverPreview"), m_hoverPreviewEnabled->isChecked());
+    }
     QStringList ruleLines;
     for (const auto& rule : m_appRules) {
         ruleLines << QStringLiteral("%1|%2").arg(rule.first).arg(rule.second);
@@ -2002,11 +2049,148 @@ void MainWindow::onResolutionFilterChanged()
     saveSettings();
 }
 
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (m_list && watched == m_list->viewport()) {
+        switch (event->type()) {
+        case QEvent::MouseMove:
+            handleGalleryHoverAt(static_cast<QMouseEvent*>(event)->position().toPoint());
+            break;
+        case QEvent::Leave:
+            stopHoverPreview();
+            break;
+        default:
+            break;
+        }
+    }
+
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::handleGalleryHoverAt(const QPoint& pos)
+{
+    if (!m_list) {
+        return;
+    }
+    QListWidgetItem* item = m_list->itemAt(pos);
+    if (!item) {
+        stopHoverPreview();
+        return;
+    }
+    onGalleryItemEntered(item);
+}
+
+void MainWindow::onGalleryItemEntered(QListWidgetItem* item)
+{
+    if (!item || !m_list || !m_hoverDelay) {
+        return;
+    }
+    const bool video = item->data(kRoleType).toInt() == 1;
+    if (!video || (m_hoverPreviewEnabled && !m_hoverPreviewEnabled->isChecked())) {
+        stopHoverPreview();
+        return;
+    }
+    const QString path = item->data(kRolePath).toString();
+    if (path.isEmpty() || path == m_hoverPreview.path || path == m_hoverPendingPath) {
+        return;
+    }
+    stopHoverPreview();
+    m_hoverRow = m_list->row(item);
+    m_hoverPendingPath = path;
+    m_hoverDelay->start();
+}
+
+void MainWindow::onHoverDelayTimeout()
+{
+    if (m_hoverPendingPath.isEmpty() || !m_list || !m_thumbs) {
+        return;
+    }
+    // 停留判定：指针已移出视口就不再起离线实例
+    if (!m_list->viewport()->underMouse()) {
+        return;
+    }
+    QList<QImage> cached;
+    if (m_thumbs->previewFrames(m_hoverPendingPath, &cached)) {
+        m_hoverPreview.path = m_hoverPendingPath;
+        m_hoverPreview.frames = cached;
+        m_hoverPreview.index = 0;
+        m_hoverAnim->start();
+        repaintHoverRow();
+        return;
+    }
+    m_thumbs->requestPreview(m_hoverPendingPath, m_list->iconSize(), 8);
+}
+
+void MainWindow::onPreviewReady(const QString& path)
+{
+    if (path.isEmpty() || path != m_hoverPendingPath) {
+        return; // 已移开：帧留在缓存里，下次悬停直接命中
+    }
+    QList<QImage> frames;
+    if (!m_thumbs->previewFrames(path, &frames) || frames.isEmpty()) {
+        return;
+    }
+    Logger::info(QStringLiteral("悬停预览已生成：%1（%2 帧）")
+                     .arg(QFileInfo(path).fileName())
+                     .arg(frames.size()));
+    m_hoverPreview.path = path;
+    m_hoverPreview.frames = frames;
+    m_hoverPreview.index = 0;
+    m_hoverAnim->start();
+    repaintHoverRow();
+}
+
+void MainWindow::onHoverFrameTick()
+{
+    if (m_hoverPreview.frames.isEmpty()) {
+        m_hoverAnim->stop();
+        return;
+    }
+    if (!m_list || !m_list->viewport()->underMouse()) {
+        stopHoverPreview();
+        return;
+    }
+    ++m_hoverPreview.index;
+    repaintHoverRow();
+}
+
+void MainWindow::stopHoverPreview()
+{
+    if (m_hoverDelay) {
+        m_hoverDelay->stop();
+    }
+    if (m_hoverAnim) {
+        m_hoverAnim->stop();
+    }
+    const bool changed = !m_hoverPreview.path.isEmpty();
+    m_hoverPreview.path.clear();
+    m_hoverPreview.frames.clear();
+    m_hoverPreview.index = 0;
+    m_hoverPendingPath.clear();
+    if (changed) {
+        repaintHoverRow();
+    }
+    m_hoverRow = -1;
+}
+
+void MainWindow::repaintHoverRow()
+{
+    if (!m_list || m_hoverRow < 0 || m_hoverRow >= m_list->count()) {
+        return;
+    }
+    if (QListWidgetItem* item = m_list->item(m_hoverRow)) {
+        m_list->viewport()->update(m_list->visualItemRect(item));
+    }
+}
+
 void MainWindow::refreshList()
 {
+    // 列表重建后行号失效，先停掉悬停预览，避免重绘到错位的行
+    stopHoverPreview();
     // 旧任务先作废：库整体重建后，为已移除项排队解码纯属浪费
     if (m_thumbs) {
         m_thumbs->clearPending();
+        m_thumbs->clearPreviewPending();
     }
     rebuildVisible();
     m_list->clear();
@@ -3088,6 +3272,31 @@ void MainWindow::finishBackendLoad()
         QFile::remove(out);
         return image;
     });
+
+    // 预览帧序列：同样走离线实例，同一实例内取 8 帧（V4.10）
+    m_thumbs->setPreviewGrabber([this](const QString& file, const QSize& size, int count) -> QList<QImage> {
+        QList<QImage> frames;
+        if (!m_engine.videoBackendReady() || file.isEmpty() || count <= 0) {
+            return frames;
+        }
+        const QString token = QString::fromLatin1(
+            QCryptographicHash::hash(file.toUtf8(), QCryptographicHash::Md5).toHex());
+        const QString dir = QDir::temp().filePath(QStringLiteral("walldesk_preview_%1").arg(token));
+        QDir().mkpath(dir);
+        const QStringList files = m_engine.snapshotVideoSeries(file, dir, size.width(), size.height(),
+                                                               count, 200);
+        frames.reserve(files.size());
+        for (const QString& path : files) {
+            QImage image;
+            if (image.load(path)) {
+                frames.append(image);
+            }
+            QFile::remove(path);
+        }
+        QDir().rmdir(dir);
+        return frames;
+    });
+    connect(m_thumbs, &ThumbnailLoader::previewReady, this, &MainWindow::onPreviewReady);
 
     maybeRestoreLast();
     requestVisibleThumbnails();
