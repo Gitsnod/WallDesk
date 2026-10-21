@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <windows.h>
+#include <psapi.h>
 
 #include "AppTheme.h"
 #include "AppPaths.h"
@@ -63,6 +64,8 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QDateTime>
+#include <QDirIterator>
 #include <QStyle>
 #include <QStyledItemDelegate>
 #include <QTableWidget>
@@ -539,6 +542,7 @@ void MainWindow::buildUi()
     outer->addLayout(root, 1);
 
     setCentralWidget(central);
+    buildStatusCapsule(central);
     compactGroupBoxes(central); // 页面建完统一压紧，留白收掉
 
     buildActions();
@@ -623,6 +627,55 @@ void MainWindow::buildActions()
     }
 }
 
+
+void MainWindow::onAddSampleWallpaper()
+{
+    const QString dir = AppPaths::dataDir() + QStringLiteral("/samples");
+    QDir().mkpath(dir);
+    const QString path = dir + QStringLiteral("/sample-gradient.png");
+    if (!QFileInfo::exists(path)) {
+        QImage image(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        QLinearGradient bg(0, 0, image.width(), image.height());
+        bg.setColorAt(0.0, QColor(0x0f, 0x1b, 0x3a));
+        bg.setColorAt(0.55, QColor(0x1e, 0x4f, 0x8a));
+        bg.setColorAt(1.0, QColor(0x9d, 0x4e, 0xd8));
+        painter.fillRect(image.rect(), bg);
+        for (int i = 0; i < 5; ++i) {
+            const QPointF center(300.0 + i * 340.0, 300.0 + (i % 3) * 240.0);
+            QRadialGradient spot(center, 250.0 + i * 26.0);
+            spot.setColorAt(0.0, QColor(255, 255, 255, 44));
+            spot.setColorAt(1.0, QColor(255, 255, 255, 0));
+            painter.fillRect(image.rect(), spot);
+        }
+        QFont f = font();
+        f.setPixelSize(64);
+        f.setBold(true);
+        painter.setFont(f);
+        painter.setPen(QColor(255, 255, 255, 225));
+        painter.drawText(image.rect(), Qt::AlignCenter, QStringLiteral("WallDesk 示例壁纸"));
+        painter.end();
+        if (!image.save(path, "PNG")) {
+            updateStatus(QStringLiteral("示例壁纸生成失败：无法写入 %1").arg(path));
+            return;
+        }
+    }
+
+    MediaItem item;
+    item.type = MediaItem::Type::Image;
+    item.path = path;
+    item.added = QDateTime::currentMSecsSinceEpoch();
+    m_items.append(item);
+    saveSettings();
+    refreshList();
+    if (m_list && !m_visible.isEmpty()) {
+        m_list->setCurrentRow(0); // 新库只有这一项
+    }
+    updateStatus(QStringLiteral("已生成示例壁纸，双击即可应用到桌面"));
+    Logger::info(QStringLiteral("已生成示例壁纸：%1").arg(path));
+}
+
 QWidget* MainWindow::buildEmptyHint()
 {
     auto* hint = new QWidget(this);
@@ -639,16 +692,23 @@ QWidget* MainWindow::buildEmptyHint()
     title->setObjectName(QStringLiteral("emptyTitle"));
     title->setAlignment(Qt::AlignHCenter);
 
-    auto* sub = new QLabel(QStringLiteral("用本页「更多」菜单里的「添加图片 / 添加视频」把文件加进来，\n"
-                                          "双击任意一张即可应用到桌面。"),
+    auto* sub = new QLabel(QStringLiteral("① 用本页「更多」菜单的「添加图片 / 添加视频」把文件加进来\n"
+                                          "② 在设置 → 壁纸里选填充方式（默认「填充」）\n"
+                                          "③ 双击任意一张即可应用到桌面"),
                            hint);
     sub->setObjectName(QStringLiteral("emptySub"));
     sub->setAlignment(Qt::AlignHCenter);
     sub->setWordWrap(true);
 
+    auto* sample = new QPushButton(QStringLiteral("没有素材？生成一张示例壁纸"), hint);
+    sample->setCursor(Qt::PointingHandCursor);
+    connect(sample, &QPushButton::clicked, this, &MainWindow::onAddSampleWallpaper);
+
     layout->addWidget(icon);
     layout->addWidget(title);
     layout->addWidget(sub);
+    layout->addSpacing(8);
+    layout->addWidget(sample, 0, Qt::AlignHCenter);
     layout->addStretch(1);
     return hint;
 }
@@ -2051,6 +2111,11 @@ void MainWindow::onResolutionFilterChanged()
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    // 状态胶囊：点一下展开 / 收起（QFrame 没有 clicked 信号）
+    if (m_capsule && watched == m_capsule && event->type() == QEvent::MouseButtonRelease) {
+        toggleStatusCapsule();
+        return true;
+    }
     if (m_list && watched == m_list->viewport()) {
         switch (event->type()) {
         case QEvent::MouseMove:
@@ -2181,6 +2246,163 @@ void MainWindow::repaintHoverRow()
     if (QListWidgetItem* item = m_list->item(m_hoverRow)) {
         m_list->viewport()->update(m_list->visualItemRect(item));
     }
+}
+
+
+// ---------------------------------------------------------------- 状态胶囊（V4.11）
+
+namespace {
+QString profileText(VlcProfile profile)
+{
+    switch (profile) {
+    case VlcProfile::Auto:
+        return QStringLiteral("自动");
+    case VlcProfile::Hardware:
+        return QStringLiteral("硬件");
+    case VlcProfile::Software:
+        return QStringLiteral("软件");
+    case VlcProfile::Quality:
+        return QStringLiteral("高画质");
+    case VlcProfile::PowerSave:
+        return QStringLiteral("省电");
+    }
+    return QStringLiteral("未知");
+}
+
+QString humanDuration(qint64 seconds)
+{
+    const qint64 h = seconds / 3600;
+    const qint64 m = (seconds % 3600) / 60;
+    const qint64 s = seconds % 60;
+    return QStringLiteral("%1:%2:%3")
+        .arg(h, 2, 10, QLatin1Char('0'))
+        .arg(m, 2, 10, QLatin1Char('0'))
+        .arg(s, 2, 10, QLatin1Char('0'));
+}
+} // namespace
+
+void MainWindow::buildStatusCapsule(QWidget* parent)
+{
+    m_capsule = new QFrame(parent);
+    m_capsule->setObjectName(QStringLiteral("statusCapsule"));
+    m_capsule->setCursor(Qt::PointingHandCursor);
+    m_capsule->setToolTip(QStringLiteral("点击展开 / 收起诊断详情"));
+    m_capsule->setStyleSheet(QStringLiteral(
+        "#statusCapsule{background:rgba(16,22,34,0.78);border-radius:11px;}"
+        "#statusCapsule QLabel{color:#e9eefb;font-size:11px;}"));
+    auto* lay = new QVBoxLayout(m_capsule);
+    lay->setContentsMargins(11, 5, 13, 6);
+    lay->setSpacing(0);
+    m_capsuleLabel = new QLabel(m_capsule);
+    m_capsuleLabel->setTextFormat(Qt::PlainText);
+    lay->addWidget(m_capsuleLabel);
+
+    m_capsule->installEventFilter(this);
+
+    m_capsuleTimer = new QTimer(this);
+    m_capsuleTimer->setInterval(2000);
+    connect(m_capsuleTimer, &QTimer::timeout, this, &MainWindow::refreshStatusCapsule);
+    m_capsuleTimer->start();
+    refreshStatusCapsule();
+}
+
+void MainWindow::layoutStatusCapsule()
+{
+    if (!m_capsule || !centralWidget()) {
+        return;
+    }
+    m_capsule->adjustSize();
+    const QSize hint = m_capsule->sizeHint();
+    const int x = qMax(8, centralWidget()->width() - hint.width() - 18);
+    const int y = qMax(8, centralWidget()->height() - hint.height() - 14);
+    m_capsule->setGeometry(x, y, hint.width(), hint.height());
+    m_capsule->raise();
+}
+
+void MainWindow::toggleStatusCapsule()
+{
+    m_capsuleExpanded = !m_capsuleExpanded;
+    if (m_capsuleExpanded) {
+        // 缓存统计要遍历目录，只在展开时算一次
+        const QDir dir(ThumbnailLoader::cacheDir());
+        const QFileInfoList files = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
+        qint64 bytes = 0;
+        for (const QFileInfo& fi : files) {
+            bytes += fi.size();
+        }
+        m_capsuleCacheText = QStringLiteral("缩略图缓存：%1 个 / %2 MB")
+                                 .arg(files.size())
+                                 .arg(QString::number(bytes / 1048576.0, 'f', 1));
+    }
+    refreshStatusCapsule();
+}
+
+void MainWindow::refreshStatusCapsule()
+{
+    if (!m_capsule || !m_capsuleLabel) {
+        return;
+    }
+
+    PROCESS_MEMORY_COUNTERS_EX pmc{};
+    QString mem = QStringLiteral("—");
+    QString peak = QStringLiteral("—");
+    if (GetProcessMemoryInfo(GetCurrentProcess(),
+                             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc))) {
+        mem = QStringLiteral("%1 MB").arg(pmc.WorkingSetSize / 1048576);
+        peak = QStringLiteral("%1 MB").arg(pmc.PeakWorkingSetSize / 1048576);
+    }
+
+    const QString video = m_engine.currentVideo();
+    const QString profile = profileText(m_engine.performanceProfile());
+    double fps = m_engine.currentFps();
+    if (fps < 0.5) {
+        fps = 0.0;
+    }
+
+    if (!m_capsuleExpanded) {
+        if (video.isEmpty()) {
+            m_capsuleLabel->setText(QStringLiteral("待机 · 内存 %1").arg(mem));
+        } else {
+            const MediaInfo info = MediaInfoProbe::probe(video);
+            const QString res = info.valid()
+                                    ? QStringLiteral("%1×%2").arg(info.width).arg(info.height)
+                                    : QStringLiteral("—");
+            m_capsuleLabel->setText(QStringLiteral("%1 · %2 · %3 fps · %4")
+                                        .arg(profile, res,
+                                             fps > 0 ? QString::number(fps, 'f', 1)
+                                                     : QStringLiteral("—"),
+                                             mem));
+        }
+    } else {
+        QStringList lines;
+        lines << QStringLiteral("解码档位：%1").arg(profile);
+        if (m_engine.videoBackendReady()) {
+            lines << QStringLiteral("下发参数：%1")
+                         .arg(m_engine.performanceArguments().join(QLatin1Char(' ')));
+        }
+        if (video.isEmpty()) {
+            lines << QStringLiteral("媒体：未播放视频");
+        } else {
+            const MediaInfo info = MediaInfoProbe::probe(video);
+            lines << QStringLiteral("媒体：%1%2")
+                         .arg(QFileInfo(video).fileName(),
+                              info.valid() ? QStringLiteral("  %1×%2")
+                                                 .arg(info.width)
+                                                 .arg(info.height)
+                                           : QString());
+            lines << QStringLiteral("实时帧率：%1")
+                         .arg(fps > 0 ? QStringLiteral("%1 fps").arg(fps, 0, 'f', 1)
+                                      : QStringLiteral("—（未播放）"));
+        }
+        if (!m_capsuleCacheText.isEmpty()) {
+            lines << m_capsuleCacheText;
+        }
+        lines << QStringLiteral("内存：%1（峰值 %2）").arg(mem, peak);
+        lines << QStringLiteral("运行时长：%1")
+                     .arg(humanDuration(m_startedAt.secsTo(QDateTime::currentDateTime())));
+        m_capsuleLabel->setText(lines.join(QLatin1Char('\n')));
+    }
+    layoutStatusCapsule();
 }
 
 void MainWindow::refreshList()
@@ -3086,6 +3308,7 @@ void MainWindow::resizeEvent(QResizeEvent* event)
     if (m_thumbTimer) {
         m_thumbTimer->start();
     }
+    layoutStatusCapsule();
 }
 
 void MainWindow::updateGalleryMetrics()

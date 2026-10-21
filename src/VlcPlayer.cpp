@@ -219,6 +219,8 @@ bool VlcPlayer::bindAll()
     ok &= bind(libvlc_media_player_set_time_, "libvlc_media_player_set_time");
     ok &= bind(libvlc_media_player_get_length_, "libvlc_media_player_get_length");
     ok &= bind(libvlc_video_take_snapshot_, "libvlc_video_take_snapshot");
+    // 帧率查询：仅状态展示用，老版本缺失时降级为 0，不影响播放
+    bind(libvlc_media_player_get_fps_, "libvlc_media_player_get_fps");
     // 画面效果接口：老版本 libVLC 没有它，缺失时静默降级（仅图片效果可用）
     bind(libvlc_video_set_adjust_float_, "libvlc_video_set_adjust_float");
     return ok;
@@ -465,6 +467,14 @@ void VlcPlayer::setTime(qint64 ms)
 qint64 VlcPlayer::length() const
 {
     return (m_player && libvlc_media_player_get_length_) ? libvlc_media_player_get_length_(m_player) : -1;
+}
+
+double VlcPlayer::fps() const
+{
+    if (!m_player || !libvlc_media_player_get_fps_) {
+        return 0.0;
+    }
+    return libvlc_media_player_get_fps_(m_player);
 }
 
 bool VlcPlayer::takeSnapshot(const QString& file, const QString& outPng, int width, int height)

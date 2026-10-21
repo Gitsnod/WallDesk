@@ -10,6 +10,22 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.11.0] - 2026-10-21
+
+### 新增（Added）
+
+- **右下角状态胶囊**：常驻显示「解码档位 · 分辨率 · 实时帧率 · 进程内存」，点击展开详情
+  （下发参数、媒体文件、缩略图缓存大小、峰值内存、运行时长）。2 秒刷新一次；
+  展开时的缓存统计只算一次，避免每次刷新都遍历目录。
+- **空库三步引导**：空库页从一句提示改为三步（添加 → 选填充方式 → 双击应用），
+  并新增「没有素材？生成一张示例壁纸」按钮：现场绘制 1920×1080 渐变图写入
+  `数据目录/samples/sample-gradient.png` 并直接入库。
+
+### 变更（Changed）
+
+- `VlcPlayer` 新增 `fps()`，绑定 `libvlc_media_player_get_fps`（**可选符号**：
+  老版本 libVLC 缺失时返回 0，界面显示 `—`，不影响播放）。
+- `CMakeLists.txt` 增加链接 `psapi`，用于读取进程工作集大小与峰值。
 ## [4.10.0] - 2026-10-21
 
 ### 新增（Added）
@@ -249,7 +265,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.10.0...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.11.0...HEAD
+[4.11.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.11.0
 [4.10.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.10.0
 [4.9.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.9.0
 [4.8.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.8.0

@@ -110,6 +110,8 @@ public:
     qint64 time() const;        // 当前播放位置（毫秒），用于休眠唤醒后续播
     void setTime(qint64 ms);
     qint64 length() const;      // 总时长（毫秒）；<=0 表示媒体尚未解析成功
+    /** 实时帧率（libVLC 报的值）；不可用或未播放返回 0（V4.11 状态胶囊用）。 */
+    double fps() const;
 
     /**
      * 离线抓帧：用独立实例把视频某一帧存成 png，用于生成缩略图。
@@ -172,6 +174,7 @@ private:
     typedef qint64 (*PfnPlayerGetTime)(void* player);
     typedef void  (*PfnPlayerSetTime)(void* player, qint64 time);
     typedef qint64 (*PfnPlayerGetLength)(void* player);
+    typedef double (*PfnPlayerGetFps)(void* player);
     typedef int   (*PfnVideoTakeSnapshot)(void* player, unsigned num, const char* path,
                                           unsigned width, unsigned height);
     typedef void  (*PfnVideoSetAdjustFloat)(void* player, unsigned option, float value);
@@ -196,6 +199,7 @@ private:
     PfnPlayerGetTime   libvlc_media_player_get_time_ = nullptr;
     PfnPlayerSetTime   libvlc_media_player_set_time_ = nullptr;
     PfnPlayerGetLength libvlc_media_player_get_length_ = nullptr;
+    PfnPlayerGetFps    libvlc_media_player_get_fps_ = nullptr;
     PfnVideoTakeSnapshot libvlc_video_take_snapshot_ = nullptr;
     PfnVideoSetAdjustFloat libvlc_video_set_adjust_float_ = nullptr;
 

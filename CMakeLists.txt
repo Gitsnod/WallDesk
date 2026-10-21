@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(WallDesk VERSION 4.10.0 LANGUAGES CXX)
+project(WallDesk VERSION 4.11.0 LANGUAGES CXX)
 
 option(WALLDESK_DEPLOY_QT "构建后自动运行 windeployqt 部署 Qt 运行时" OFF)
 
@@ -97,7 +97,7 @@ if (WIN32)
     # 壁纸相关：SystemParametersInfo / EnumWindows / SetParent
     # 资源相关：FindResource / LoadResource（读取内嵌 VLC 运行时）
     # 注册表读取：RegOpenKeyEx（Logger 的系统信息探测）
-    target_link_libraries(WallDesk PRIVATE user32 gdi32 shell32 advapi32)
+    target_link_libraries(WallDesk PRIVATE user32 gdi32 shell32 advapi32 psapi)
 endif()
 
 # 编译完成后，把 Qt 依赖的 DLL 拷到 exe 目录。

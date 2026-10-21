@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDateTime>
 #include <QImage>
 #include <QList>
 #include <QMainWindow>
@@ -22,6 +23,7 @@ class QAction;
 class QCheckBox;
 class QComboBox;
 class QFormLayout;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -82,6 +84,8 @@ protected:
 
 private slots:
     void onAddImages();
+    /** 空库引导：生成一张示例壁纸并入库（V4.11）。 */
+    void onAddSampleWallpaper();
     void onAddVideos();
     void onRemoveSelected();
     void onClearAll();
@@ -390,6 +394,18 @@ private:
     int m_hoverRow = -1;            // 正在预览的行号
     /** 只重绘悬停卡片所在矩形，避免整表刷新。 */
     void repaintHoverRow();
+
+    // ---- V4.11：右下角状态胶囊 ----
+    void buildStatusCapsule(QWidget* parent);
+    void layoutStatusCapsule();
+    void refreshStatusCapsule();
+    void toggleStatusCapsule();
+    QFrame* m_capsule = nullptr;
+    QLabel* m_capsuleLabel = nullptr;
+    QTimer* m_capsuleTimer = nullptr;
+    bool m_capsuleExpanded = false;
+    QString m_capsuleCacheText;   // 展开时算一次的缓存统计
+    QDateTime m_startedAt = QDateTime::currentDateTime();
 
     bool m_backendReady = false;
     ThemeKind m_theme = ThemeKind::System;
