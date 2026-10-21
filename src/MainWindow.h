@@ -30,6 +30,7 @@ class QDropEvent;
 class QFormLayout;
 class QFrame;
 class QParallelAnimationGroup;
+class QThreadPool;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -227,6 +228,18 @@ private:
     void evaluatePausePolicy();
     /** 前台进程是否命中「暂停」规则；matched 回填是否命中任意规则。 */
     bool appRulePausesForeground(bool* matched) const;
+    // ---- V4.15：图片特效在线程池里算，UI 线程只负责下发 ----
+    /** 应用一张图片壁纸：特效副本在后台准备，完成后回 UI 线程交给系统。 */
+    void applyImageWallpaper(const QString& path, const QString& displayName);
+    void finishImageApply(quint64 token, const WallpaperEngine::PreparedImage& prepared,
+                          const QString& path, const QString& displayName, ImageFit fit,
+                          const ImageEffect& fx);
+    void finishMonitorsApply(quint64 token, const QList<MonitorInfo>& monitors,
+                             const QList<int>& indexes,
+                             const QList<WallpaperEngine::PreparedImage>& prepared, ImageFit fit);
+    QThreadPool* m_imagePrepPool = nullptr; // 串行 1 线程：批量特效任务不互相抢核
+    quint64 m_imageApplyToken = 0;          // 过期请求丢弃用
+
     /** 按 m_appRules 重建规则列表控件。 */
     void refreshRuleList();
     /** 按 m_triggers 重建触发规则列表控件。 */

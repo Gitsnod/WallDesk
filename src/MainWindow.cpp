@@ -47,6 +47,9 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QScrollBar>
+#include <QPointer>
+#include <QThread>
+#include <QThreadPool>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPainter>
@@ -340,6 +343,11 @@ MainWindow::MainWindow(QWidget* parent)
     m_thumbs = new ThumbnailLoader(this);
     connect(m_thumbs, &ThumbnailLoader::ready, this, &MainWindow::onThumbnailReady);
     Logger::info(QStringLiteral("缩略图缓存格式：%1").arg(ThumbnailLoader::cacheFormatName()));
+
+    // 画面效果准备线程池：串行 1 线程。特效是重 CPU 活，多开线程只会互相抢核；
+    // 串行还能保证「先点后点」的完成顺序与用户操作顺序一致（另有 token 兜底丢弃过期结果）。
+    m_imagePrepPool = new QThreadPool(this);
+    m_imagePrepPool->setMaxThreadCount(1);
 
     buildUi();
     refreshMonitors(); // 需在 loadSettings 之前，配置里保存的是显示器序号
@@ -1682,29 +1690,52 @@ void MainWindow::onMonitorsApply()
     }
     const auto fit = static_cast<ImageFit>(m_fitCombo->currentData().toInt());
     const ImageEffect fx = collectEffect();
-    int ok = 0;
-    int failed = 0;
-    QString lastError;
+
+    // 先收集要单独设置的屏幕：每块屏的特效副本都在后台算，算完回 UI 线程逐屏下发，
+    // 这样 N 块屏不会让界面卡 N 次（COM 调用必须留在 UI 线程）。
+    QList<int> indexes;
+    QStringList paths;
     for (int i = 0; i < monitors.size() && i < m_monitorCombos.size(); ++i) {
         const QString path = m_monitorCombos.at(i)->currentData().toString();
         if (path.isEmpty()) {
             continue; // 跟随主设置
         }
-        QString err;
-        if (m_engine.applyImageToMonitor(path, monitors.at(i).id, fit, fx, &err)) {
-            ++ok;
-        } else {
-            ++failed;
-            lastError = err;
+        indexes.append(i);
+        paths.append(path);
+    }
+    if (indexes.isEmpty()) {
+        updateStatus(QStringLiteral("没有需要单独设置的屏幕"));
+        return;
+    }
+
+    const quint64 token = ++m_imageApplyToken;
+    QPointer<MainWindow> guard(this);
+    if (!m_imagePrepPool) {
+        QList<WallpaperEngine::PreparedImage> prepared;
+        for (const QString& path : paths) {
+            prepared.append(WallpaperEngine::prepareImageFile(path, fx));
         }
+        finishMonitorsApply(token, monitors, indexes, prepared, fit);
+        return;
     }
-    if (failed > 0) {
-        updateStatus(QStringLiteral("%1 块屏幕已设置，%2 块失败：%3").arg(ok).arg(failed).arg(lastError),
-                     true);
-    } else {
-        updateStatus(QStringLiteral("已为 %1 块屏幕单独设置壁纸").arg(ok));
-    }
-    Logger::info(QStringLiteral("多屏应用：成功 %1 失败 %2").arg(ok).arg(failed));
+    m_imagePrepPool->start(QRunnable::create([guard, token, monitors, indexes, paths, fit, fx]() {
+        QList<WallpaperEngine::PreparedImage> prepared;
+        for (const QString& path : paths) {
+            prepared.append(WallpaperEngine::prepareImageFile(path, fx));
+        }
+        if (!guard) {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            guard.data(),
+            [guard, token, monitors, indexes, prepared, fit]() {
+                if (!guard) {
+                    return;
+                }
+                guard->finishMonitorsApply(token, monitors, indexes, prepared, fit);
+            },
+            Qt::QueuedConnection);
+    }));
 }
 
 void MainWindow::onMonitorsReset()
@@ -3717,6 +3748,109 @@ void MainWindow::maybeRestoreLast()
     applyItem(item);
 }
 
+
+void MainWindow::applyImageWallpaper(const QString& path, const QString& displayName)
+{
+    const auto fit = static_cast<ImageFit>(m_fitCombo->currentData().toInt());
+    const ImageEffect fx = collectEffect();
+    const quint64 token = ++m_imageApplyToken;
+
+    if (!m_imagePrepPool) {
+        // 理论不会发生（构造里就建了），兜底走同步，功能不丢
+        finishImageApply(token, WallpaperEngine::prepareImageFile(path, fx), path, displayName, fit,
+                         fx);
+        return;
+    }
+
+    // 后台只算文件；注册表与 SPI 调用留在 UI 线程（见 finishImageApply）
+    QPointer<MainWindow> guard(this);
+    m_imagePrepPool->start(QRunnable::create([guard, token, path, displayName, fit, fx]() {
+        const auto prepared = WallpaperEngine::prepareImageFile(path, fx);
+        if (!guard) {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            guard.data(),
+            [guard, token, prepared, path, displayName, fit, fx]() {
+                if (!guard) {
+                    return;
+                }
+                guard->finishImageApply(token, prepared, path, displayName, fit, fx);
+            },
+            Qt::QueuedConnection);
+    }));
+}
+
+void MainWindow::finishImageApply(quint64 token, const WallpaperEngine::PreparedImage& prepared,
+                                  const QString& path, const QString& displayName, ImageFit fit,
+                                  const ImageEffect& fx)
+{
+    if (token != m_imageApplyToken) {
+        // 用户在这段时间里又应用了别的，丢掉过期结果，避免"最后完成的那张"覆盖最新选择
+        Logger::info(QStringLiteral("图片应用结果已过期，丢弃：%1").arg(QFileInfo(path).fileName()));
+        return;
+    }
+
+    if (!prepared.cacheHit) {
+        Logger::info(QStringLiteral("画面效果已生成：%1（%2 ms，执行线程 0x%3 / UI 线程 0x%4）")
+                         .arg(QFileInfo(path).fileName())
+                         .arg(prepared.elapsedMs)
+                         .arg(prepared.threadId, 0, 16)
+                         .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()), 0, 16));
+    }
+
+    QString err;
+    if (m_engine.applyPreparedImage(prepared, fit, fx, &err)) {
+        Logger::info(QStringLiteral("图片壁纸已应用：%1（fit=%2）").arg(path).arg(static_cast<int>(fit)));
+        updateStatus(QStringLiteral("已应用图片壁纸：%1").arg(displayName));
+    } else {
+        Logger::warning(QStringLiteral("图片壁纸应用失败：%1（%2）").arg(path, err));
+        updateStatus(err, true);
+    }
+}
+
+void MainWindow::finishMonitorsApply(quint64 token, const QList<MonitorInfo>& monitors,
+                                     const QList<int>& indexes,
+                                     const QList<WallpaperEngine::PreparedImage>& prepared,
+                                     ImageFit fit)
+{
+    if (token != m_imageApplyToken) {
+        Logger::info(QStringLiteral("逐屏应用结果已过期，丢弃"));
+        return;
+    }
+    const ImageEffect fx = collectEffect();
+    int ok = 0;
+    int failed = 0;
+    QString lastError;
+    for (int k = 0; k < indexes.size() && k < prepared.size(); ++k) {
+        const int monitorIndex = indexes.at(k);
+        if (monitorIndex >= monitors.size()) {
+            continue;
+        }
+        if (!prepared.at(k).cacheHit) {
+            Logger::info(QStringLiteral("逐屏画面效果已生成：%1（%2 ms，执行线程 0x%3）")
+                             .arg(QFileInfo(prepared.at(k).source).fileName())
+                             .arg(prepared.at(k).elapsedMs)
+                             .arg(prepared.at(k).threadId, 0, 16));
+        }
+        QString err;
+        if (m_engine.applyPreparedImageToMonitor(prepared.at(k), monitors.at(monitorIndex).id, fit,
+                                                 fx, &err)) {
+            ++ok;
+        } else {
+            ++failed;
+            lastError = err;
+        }
+    }
+    if (failed > 0) {
+        updateStatus(QStringLiteral("%1 块屏幕已设置，%2 块失败：%3").arg(ok).arg(failed).arg(lastError),
+                     true);
+    } else {
+        updateStatus(QStringLiteral("已为 %1 块屏幕单独设置壁纸").arg(ok));
+    }
+    Logger::info(QStringLiteral("多屏应用：成功 %1 失败 %2").arg(ok).arg(failed));
+}
+
 void MainWindow::applyItem(const MediaItem& item)
 {
     QSettings s;
@@ -3735,15 +3869,7 @@ void MainWindow::applyItem(const MediaItem& item)
     const QString name = QFileInfo(item.path).fileName();
 
     if (item.type == MediaItem::Type::Image) {
-        const auto fit = static_cast<ImageFit>(m_fitCombo->currentData().toInt());
-        QString err;
-        if (m_engine.applyImage(item.path, fit, collectEffect(), &err)) {
-            Logger::info(QStringLiteral("图片壁纸已应用：%1（fit=%2）").arg(item.path).arg(static_cast<int>(fit)));
-            updateStatus(QStringLiteral("已应用图片壁纸：%1").arg(name));
-        } else {
-            Logger::warning(QStringLiteral("图片壁纸应用失败：%1（%2）").arg(item.path, err));
-            updateStatus(err, true);
-        }
+        applyImageWallpaper(item.path, name);
         return;
     }
 

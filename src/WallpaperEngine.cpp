@@ -13,6 +13,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QHash>
 #include <QImage>
@@ -63,41 +64,56 @@ QString effectCachePath(const QString& source, const ImageEffect& fx)
     return AppPaths::dataDir() + QStringLiteral("/effects/") + hash + QStringLiteral(".png");
 }
 
-/** 需要效果时生成（或复用）处理后的副本，输出写入 targetOut。 */
-bool prepareImageTarget(const QString& path, const ImageEffect& fx, QString* targetOut,
-                        QString* err)
+/** 需要效果时生成（或复用）处理后的副本。线程安全：只做文件与像素运算。 */
+WallpaperEngine::PreparedImage prepareImageFileImpl(const QString& path, const ImageEffect& fx)
 {
+    WallpaperEngine::PreparedImage out;
+    out.threadId = reinterpret_cast<quintptr>(QThread::currentThreadId());
+    QElapsedTimer timer;
+    timer.start();
+
     const QFileInfo info(path);
     if (!info.exists()) {
-        if (err) {
-            *err = QStringLiteral("文件不存在：%1").arg(path);
-        }
-        return false;
+        out.error = QStringLiteral("文件不存在：%1").arg(path);
+        out.elapsedMs = timer.elapsed();
+        return out;
     }
     const QString absolute = info.absoluteFilePath();
+    out.source = absolute;
+
+    // 无特效：直接用原图，不需要线程也不需要缓存
     if (fx.isDefault()) {
-        *targetOut = absolute;
-        return true;
+        out.ok = true;
+        out.target = absolute;
+        out.elapsedMs = timer.elapsed();
+        return out;
     }
+
     const QString cache = effectCachePath(absolute, fx);
-    if (!QFileInfo::exists(cache)) {
-        QImage source;
-        if (!source.load(absolute)) {
-            if (err) {
-                *err = QStringLiteral("无法读取图片：%1").arg(absolute);
-            }
-            return false;
-        }
-        QDir().mkpath(QFileInfo(cache).absolutePath());
-        if (!ImageEffects::apply(source, fx).save(cache, "PNG")) {
-            if (err) {
-                *err = QStringLiteral("画面效果处理失败：%1").arg(absolute);
-            }
-            return false;
-        }
+    if (QFileInfo::exists(cache)) {
+        out.ok = true;
+        out.target = cache;
+        out.elapsedMs = timer.elapsed();
+        return out;
     }
-    *targetOut = cache;
-    return true;
+
+    out.cacheHit = false;
+    QImage source;
+    if (!source.load(absolute)) {
+        out.error = QStringLiteral("无法读取图片：%1").arg(absolute);
+        out.elapsedMs = timer.elapsed();
+        return out;
+    }
+    QDir().mkpath(QFileInfo(cache).absolutePath());
+    if (!ImageEffects::apply(source, fx).save(cache, "PNG")) {
+        out.error = QStringLiteral("画面效果处理失败：%1").arg(absolute);
+        out.elapsedMs = timer.elapsed();
+        return out;
+    }
+    out.ok = true;
+    out.target = cache;
+    out.elapsedMs = timer.elapsed();
+    return out;
 }
 
 /** IDesktopWallpaper 的填充位姿枚举与本程序 ImageFit 的映射。 */
@@ -248,6 +264,13 @@ LRESULT CALLBACK hostWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 } // namespace
 
+WallpaperEngine::PreparedImage WallpaperEngine::prepareImageFile(const QString& path,
+                                                                const ImageEffect& fx)
+{
+    // 真正干活的是匿名命名空间里的 impl：静态成员不能定义在匿名命名空间内
+    return prepareImageFileImpl(path, fx);
+}
+
 QList<MonitorInfo> WallpaperEngine::listMonitors()
 {
     QList<MonitorInfo> result;
@@ -351,14 +374,16 @@ bool WallpaperEngine::loadBackendFrom(const QString& directory, QString* err)
     return m_vlc.loadFromDirectory(directory, err);
 }
 
-bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, const ImageEffect& fx,
-                                 QString* err)
+bool WallpaperEngine::applyPreparedImage(const PreparedImage& prepared, ImageFit fit,
+                                         const ImageEffect& fx, QString* err)
 {
-    QString target;
-    if (!prepareImageTarget(path, fx, &target, err)) {
+    if (!prepared.ok) {
+        if (err) {
+            *err = prepared.error;
+        }
         return false;
     }
-    const QFileInfo info(target);
+    const QFileInfo info(prepared.target);
 
     // 填充方式写入注册表，随后必须再触发一次 SPI_SETDESKWALLPAPER 才会生效
     QSettings reg(QStringLiteral(R"(HKEY_CURRENT_USER\Control Panel\Desktop)"), QSettings::NativeFormat);
@@ -387,7 +412,7 @@ bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, const ImageE
         break;
     }
     // 参数与上次完全一致且上次已成功：直接返回，省掉一次注册表写入和一次系统广播
-    const QString absolute = info.absoluteFilePath();
+    const QString absolute = prepared.source;
     if (m_lastImageOk && m_lastImagePath == absolute && m_lastStyle == style
         && m_lastTile == tile && m_lastEffect == fx.key()) {
         // 参数未变也要保证视频已停：图片与视频互斥
@@ -423,14 +448,17 @@ bool WallpaperEngine::applyImage(const QString& path, ImageFit fit, const ImageE
     return true;
 }
 
-bool WallpaperEngine::applyImageToMonitor(const QString& path, const QString& monitorId,
-                                          ImageFit fit, const ImageEffect& fx, QString* err)
+bool WallpaperEngine::applyPreparedImageToMonitor(const PreparedImage& prepared,
+                                                 const QString& monitorId, ImageFit fit,
+                                                 const ImageEffect& fx, QString* err)
 {
     if (monitorId.isEmpty()) {
-        return applyImage(path, fit, fx, err);
+        return applyPreparedImage(prepared, fit, fx, err);
     }
-    QString target;
-    if (!prepareImageTarget(path, fx, &target, err)) {
+    if (!prepared.ok) {
+        if (err) {
+            *err = prepared.error;
+        }
         return false;
     }
 
@@ -439,17 +467,18 @@ bool WallpaperEngine::applyImageToMonitor(const QString& path, const QString& mo
                                   IID_IDesktopWallpaper, reinterpret_cast<void**>(&wallpaper));
     if (FAILED(hr) || !wallpaper) {
         // 系统不支持逐屏接口（极老的 Windows）：退回全局设置，功能不丢
-        return applyImage(path, fit, fx, err);
+        return applyPreparedImage(prepared, fit, fx, err);
     }
 
     wallpaper->SetPosition(wallpaperPosition(fit));
-    hr = wallpaper->SetWallpaper(reinterpret_cast<LPCWSTR>(monitorId.utf16()),
-                                 reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(target).utf16()));
+    hr = wallpaper->SetWallpaper(
+        reinterpret_cast<LPCWSTR>(monitorId.utf16()),
+        reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(prepared.target).utf16()));
     wallpaper->Release();
     if (FAILED(hr)) {
         if (err) {
             *err = QStringLiteral("逐屏设置壁纸失败：%1（错误码 0x%2）")
-                       .arg(QFileInfo(path).fileName())
+                       .arg(QFileInfo(prepared.source).fileName())
                        .arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0'));
         }
         return false;

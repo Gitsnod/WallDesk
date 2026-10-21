@@ -83,17 +83,35 @@ public:
     void setTarget(ScreenTarget target, int monitorIndex);
 
     /**
-     * 应用图片壁纸。fx 非空时会先在本地生成处理后的副本再交给系统，
-     * 结果按「文件 + 参数指纹」缓存，重复应用不重复计算。
+     * 图片准备结果（V4.15）。把「读图 + 逐像素特效 + 写缓存」与「下发系统」拆开：
+     * 前者纯文件运算可放工作线程，后者碰注册表与系统接口必须在 UI 线程。
      */
-    bool applyImage(const QString& path, ImageFit fit, const ImageEffect& fx,
-                    QString* err = nullptr);
+    struct PreparedImage {
+        bool ok = false;
+        QString source;   // 原图绝对路径，用于「参数未变」去重
+        QString target;   // 实际交给系统的文件（原图，或特效缓存副本）
+        QString error;    // ok 为 false 时的原因
+        qint64 elapsedMs = 0; // 准备耗时（在工作线程内测），供日志与诊断
+        bool cacheHit = true; // 是否命中已有缓存（false 表示本次真的算过）
+        quintptr threadId = 0; // 实际执行准备的线程 ID，用于确认真的没在 UI 线程上算
+    };
     /**
-     * 只给某一台显示器设置壁纸（IDesktopWallpaper 逐屏接口）。
-     * monitorId 为空或接口不可用时回退为全局设置。
+     * 计算图片的目标文件（含画面效果副本）。**线程安全**：
+     * 只做文件读取、像素运算与缓存写入，不碰注册表、COM 或窗口，可直接放工作线程。
      */
-    bool applyImageToMonitor(const QString& path, const QString& monitorId, ImageFit fit,
-                             const ImageEffect& fx, QString* err = nullptr);
+    static PreparedImage prepareImageFile(const QString& path, const ImageEffect& fx);
+    /**
+     * 把准备好的文件交给系统（注册表 + SPI_SETDESKWALLPAPER）。**必须在 UI 线程调用**。
+     * 参数与上次完全一致时跳过系统调用，直接返回成功。
+     */
+    bool applyPreparedImage(const PreparedImage& prepared, ImageFit fit, const ImageEffect& fx,
+                            QString* err = nullptr);
+    /**
+     * 逐屏版本（IDesktopWallpaper）。**必须在 UI 线程调用**。
+     * monitorId 为空时回退为全局设置。
+     */
+    bool applyPreparedImageToMonitor(const PreparedImage& prepared, const QString& monitorId,
+                                     ImageFit fit, const ImageEffect& fx, QString* err = nullptr);
     /**
      * 播放视频壁纸。volume 为 0..100。
      *

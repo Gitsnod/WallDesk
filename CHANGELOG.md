@@ -10,6 +10,28 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.15.0] - 2026-10-21
+
+### 变更（Changed）
+
+- **图片画面效果改到工作线程计算**：读图、逐像素处理（亮度/对比度/饱和度/灰度/模糊/暗角）
+  与写缓存副本全部移出 UI 线程，UI 线程只保留注册表写入与 `SPI_SETDESKWALLPAPER`。
+  实测 4000×3000 图 + 模糊 15 + 暗角 80：UI 消息最长阻塞由 2.29 s 降到 0.33 s。
+- **过期结果丢弃**：每张图的应用请求带递增序号，完成时序号已过期则丢弃，
+  避免「先点后完成」的结果覆盖用户后来选的那张。
+- **逐屏应用同批处理**：多屏各自单独设置时，先在后台把所有特效副本算完，再回 UI 线程
+  逐屏下发，不再一块屏卡一次。
+
+### 新增（Added）
+
+- 日志记录画面效果的耗时与执行线程：
+  `画面效果已生成：<文件>（2175 ms，执行线程 0x6840 / UI 线程 0x46e8）`，
+  可直接确认它没在 UI 线程上算。
+
+超大图的剩余耗时由系统接口主导：同一张 4000×3000 图不加任何特效时，点击到壁纸生效仍需约
+5.8 s（`SPI_SETDESKWALLPAPER` 内部会重新编码壁纸）。这一项本次未改，方向是先把图缩放到
+虚拟桌面分辨率再下发。
+
 ## [4.14.0] - 2026-10-21
 
 ### 新增（Added）
@@ -316,7 +338,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.14.0...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.15.0...HEAD
+[4.15.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.15.0
 [4.14.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.14.0
 [4.13.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.13.0
 [4.12.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.12.0
