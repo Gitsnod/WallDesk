@@ -66,6 +66,10 @@
 #include <QStatusBar>
 #include <QDateTime>
 #include <QDirIterator>
+#include <QEasingCurve>
+#include <QGraphicsOpacityEffect>
+#include <QParallelAnimationGroup>
+#include <QPropertyAnimation>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
@@ -1472,7 +1476,7 @@ QWidget* MainWindow::buildSettingsPage()
     addPage(QStringLiteral("外观与效果"), {fxBox, widgetBox, audioBox, lookBox});
     addPage(QStringLiteral("高级"), {powerBox, miscBox});
 
-    const auto showPage = [this, scroll, layout](int row) {
+    const auto showPage = [this, scroll, container](int row) {
         if (row < 0 || row >= m_settingsPages.size()) {
             return;
         }
@@ -1484,12 +1488,86 @@ QWidget* MainWindow::buildSettingsPage()
         if (QScrollBar* bar = scroll->verticalScrollBar()) {
             bar->setValue(0); // 换页回到顶部，否则会停在上一个子页的滚动位置
         }
+        // 只在设置页真的显示在屏幕上时才演：构造期与程序化恢复页码都不带动画
+        animateSettingsPage(row, container->isVisible());
     };
     connect(m_settingsNav, &QListWidget::currentRowChanged, this, showPage);
     m_settingsNav->setCurrentRow(0);
     showPage(0);
 
     return container;
+}
+
+// ---------------------------------------------------------------- 设置子页缓动（V4.14）
+
+void MainWindow::animateSettingsPage(int row, bool pageVisible)
+{
+    // 上一次没走完就换了页：先拆干净，避免两组动画同时改同一批控件
+    if (m_pageFadeAnim) {
+        m_pageFadeAnim->stop();
+        m_pageFadeAnim->deleteLater();
+        m_pageFadeAnim = nullptr;
+    }
+    if (!m_pageFxTargets.isEmpty()) {
+        for (QWidget* widget : m_pageFxTargets) {
+            if (widget) {
+                widget->setGraphicsEffect(nullptr); // 连同旧 effect 一起销毁
+            }
+        }
+        m_pageFxTargets.clear();
+    }
+
+    if (m_pageFadeMs <= 0 || !pageVisible || row < 0 || row >= m_settingsPages.size()) {
+        return;
+    }
+
+    // 系统里关了「在 Windows 中显示动画」就不演，尊重辅助功能设置
+    BOOL systemAnimations = TRUE;
+    if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &systemAnimations, 0)
+        && !systemAnimations) {
+        return;
+    }
+
+    auto* group = new QParallelAnimationGroup(this);
+    for (QWidget* box : m_settingsPages.at(row)) {
+        if (!box) {
+            continue;
+        }
+        auto* effect = new QGraphicsOpacityEffect(box);
+        effect->setOpacity(0.0);
+        box->setGraphicsEffect(effect);
+        auto* anim = new QPropertyAnimation(effect, "opacity", group);
+        anim->setDuration(m_pageFadeMs);
+        anim->setStartValue(0.0);
+        anim->setEndValue(1.0);
+        // 只做减速（ease-out），不用回弹曲线：界面元素过冲会显得廉价
+        anim->setEasingCurve(QEasingCurve::OutCubic);
+        group->addAnimation(anim);
+        m_pageFxTargets.append(box);
+    }
+    if (group->animationCount() == 0) {
+        delete group;
+        return;
+    }
+
+    Logger::info(QStringLiteral("设置子页切换：第 %1 页，缓动 %2 ms").arg(row).arg(m_pageFadeMs));
+
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group]() {
+        // 动画结束后把 effect 摘掉：常驻 effect 会让子树每帧走离屏绘制
+        for (QWidget* widget : m_pageFxTargets) {
+            if (widget) {
+                widget->setGraphicsEffect(nullptr);
+            }
+        }
+        m_pageFxTargets.clear();
+        if (m_pageFadeAnim == group) {
+            m_pageFadeAnim = nullptr;
+        }
+        group->deleteLater();
+    });
+
+    m_pageFadeAnim = group;
+    group->start();
 }
 
 // ---------------------------------------------------------------- 多屏（V4.6）
@@ -1750,6 +1828,8 @@ void MainWindow::loadSettings()
     }
     // 缩略图淡入时长：0 关闭；默认 180ms（V4.13，暂时只走配置，不做界面）
     m_fadeMs = qBound(0, s.value(QStringLiteral("uiFadeMs"), 180).toInt(), 1000);
+    // 设置子页切换缓动时长：0 关闭；默认 160ms（V4.14，暂时只走配置）
+    m_pageFadeMs = qBound(0, s.value(QStringLiteral("uiPageFadeMs"), 160).toInt(), 1000);
     m_appRules.clear();
     // 用换行分隔的普通字符串存，而不是 QStringList：
     // QSettings 在注册表里对 QStringList 用的是 Qt 私有编码，手改/工具注入读不回来，

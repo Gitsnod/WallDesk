@@ -10,6 +10,21 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.14.0] - 2026-10-21
+
+### 新增（Added）
+
+- **设置子页切换缓动**：切换「壁纸 / 播放 / 场景 / 外观与效果 / 高级」时，新页内容用
+  160ms 从透明过渡到不透明；缓动曲线 `QEasingCurve::OutCubic`，只减速、不回弹。
+- 新增配置项 `uiPageFadeMs`（默认 160，0 关闭，上限 1000）；暂不提供界面入口。
+
+### 变更（Changed）
+
+- 不透明度效果只在动画期间挂在控件上，`finished` 后立即 `setGraphicsEffect(nullptr)` 摘除，
+  避免常驻效果让子树每帧离屏绘制。
+- 读取系统「在 Windows 中显示动画」设置（`SPI_GETCLIENTAREAANIMATION`），关闭时不做过渡。
+- 动画只在设置页真正可见时启动：构造期与程序化恢复页码（`settingsPage`）保持瞬时切换。
+
 ## [4.13.0] - 2026-10-21
 
 ### 新增（Added）
@@ -301,7 +316,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.13.0...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.14.0...HEAD
+[4.14.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.14.0
 [4.13.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.13.0
 [4.12.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.12.0
 [4.11.1]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.11.1

@@ -29,6 +29,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QFormLayout;
 class QFrame;
+class QParallelAnimationGroup;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -270,6 +271,11 @@ private:
     // V4.8：设置页的二级导航，以及「每个子页包含哪些分组框」的对应表
     // （下标与 m_settingsNav 的行号一一对应）。
     QListWidget* m_settingsNav = nullptr;
+    // ---- V4.14：设置子页切换缓动 ----
+    void animateSettingsPage(int row, bool pageVisible);
+    int m_pageFadeMs = 160;                       // 0 = 关闭；配置键 uiPageFadeMs
+    QParallelAnimationGroup* m_pageFadeAnim = nullptr;
+    QList<QWidget*> m_pageFxTargets;              // 当前挂了不透明度效果的组
     QList<QList<QWidget*>> m_settingsPages;
     QComboBox* m_fitCombo = nullptr;
     QComboBox* m_screenCombo = nullptr;
