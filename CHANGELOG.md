@@ -10,6 +10,26 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.16.0] - 2026-10-21
+
+### 新增（Added）
+
+- **空闲暂停**：整个系统没有鼠标移动、没有按键达到设定时长后，暂停视频壁纸，
+  画面停在当前帧；任何键鼠输入后半秒内自动续播。默认关闭，在「设置 → 省电」勾选
+  「空闲时暂停」并设置阈值（1–120 分钟，默认 5 分钟）。
+- 暂停原因标签新增「空闲 N 分钟」一种，与手动 / 锁屏 / 电池 / 全屏 / 远程会话 /
+  逐应用规则并列显示，可随时看清当前卡在哪一条原因上。
+
+### 变更（Changed）
+
+- 空闲暂停实现为**整播暂停**而非「降到 15 fps」：libVLC 公共 API 不支持给已起播的
+  播放器增删视频滤镜（`fps` 滤镜只能在起播前挂载，切换需停播重加，恢复时会有一次
+  可见卡顿），自定义 vout / 裸帧回调自渲染则等于自建渲染链路、丢失 GPU 加速。
+  整播暂停是现有聚合暂停架构内的自然扩展，空闲时解码完全停止，比 15 fps 更省，
+  且恢复无重载 hitch。
+- 空闲判定只看系统级键鼠输入（`GetLastInputInfo`，500 ms 轮询）。报告原建议中的
+  「无音频」「无焦点变化」对壁纸场景不适用（壁纸输出默认静音、从不获得焦点），未实现。
+
 ## [4.15.0] - 2026-10-21
 
 ### 变更（Changed）
@@ -338,7 +358,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.15.0...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.16.0...HEAD
+[4.16.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.16.0
 [4.15.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.15.0
 [4.14.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.14.0
 [4.13.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.13.0

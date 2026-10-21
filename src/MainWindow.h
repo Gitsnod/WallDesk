@@ -132,6 +132,8 @@ private slots:
     void onRemoteSessionChanged(bool connected);
     /** 逐应用规则轮询（V4.9）：前台进程命中规则时调整暂停状态。 */
     void onAppRuleTick();
+    /** 空闲暂停轮询（V4.16）：系统级键鼠输入空闲超过阈值时暂停，有输入立即恢复。 */
+    void onIdleTick();
 
     // 维护与外观
     void onReattach();
@@ -404,6 +406,8 @@ private:
     bool m_appRulePaused = false;
     /** 规则显式要求「忽略」——用于压住全屏暂停（V4.9）。 */
     bool m_appRuleIgnored = false;
+    /** 系统级键鼠输入空闲超过阈值（V4.16）。 */
+    bool m_idlePaused = false;
 
     // ---- V4.9：逐应用规则与远程会话 ----
     QCheckBox* m_pauseOnRemote = nullptr;
@@ -412,6 +416,11 @@ private:
     QLabel* m_pauseStateLabel = nullptr;
     QTimer* m_ruleTimer = nullptr;
     QList<QPair<QString, int>> m_appRules; // 可执行文件名 → 0=暂停 / 1=忽略（不暂停）
+
+    // ---- V4.16：空闲暂停 ----
+    QCheckBox* m_pauseOnIdle = nullptr;
+    QSpinBox* m_idleMinutesSpin = nullptr;
+    QTimer* m_idleTimer = nullptr;
 
     // ---- V4.9：触发规则（进程 → 预设）----
     QListWidget* m_triggerList = nullptr;

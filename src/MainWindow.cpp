@@ -1379,6 +1379,47 @@ QWidget* MainWindow::buildSettingsPage()
     powerForm->addRow(QString(), m_pauseOnLock);
     powerForm->addRow(QString(), m_pauseOnBattery);
     powerForm->addRow(QString(), m_pauseOnFullscreen);
+
+    // 空闲暂停（V4.16）：勾选后配一个「空闲多少分钟」的阈值。
+    // 单独一行放复选框 + 数字框，避免 QFormLayout 的标签列把复选框顶到奇怪的位置。
+    auto* idleRow = new QWidget(powerBox);
+    auto* idleLayout = new QHBoxLayout(idleRow);
+    idleLayout->setContentsMargins(0, 0, 0, 0);
+    m_pauseOnIdle = new QCheckBox(QStringLiteral("空闲时暂停"), idleRow);
+    m_pauseOnIdle->setToolTip(QStringLiteral(
+        "整个系统没有鼠标移动、没有按键达到设定时长后，暂停视频壁纸（画面停在当前帧）。\n"
+        "一有任何键鼠输入立即续播，间隔不超过 0.5 秒。"));
+    m_idleMinutesSpin = new QSpinBox(idleRow);
+    m_idleMinutesSpin->setRange(1, 120);
+    m_idleMinutesSpin->setSuffix(QStringLiteral(" 分钟无操作后暂停"));
+    m_idleMinutesSpin->setToolTip(QStringLiteral("阈值范围 1–120 分钟。"));
+    idleLayout->addWidget(m_pauseOnIdle);
+    idleLayout->addWidget(m_idleMinutesSpin);
+    idleLayout->addStretch(1);
+    connect(m_pauseOnIdle, &QCheckBox::toggled, this, [this](bool) {
+        m_idleMinutesSpin->setEnabled(m_pauseOnIdle->isChecked());
+        if (m_idleTimer) {
+            if (m_pauseOnIdle->isChecked()) {
+                m_idleTimer->start();
+            } else {
+                m_idleTimer->stop();
+                // 关掉功能时若正因空闲暂停着，立刻恢复
+                if (m_idlePaused) {
+                    m_idlePaused = false;
+                    evaluatePausePolicy();
+                }
+            }
+        }
+        saveSettings();
+    });
+    connect(m_idleMinutesSpin, &QSpinBox::valueChanged, this, [this](int) { saveSettings(); });
+    powerForm->addRow(QString(), idleRow);
+
+    // 500ms 轮询 GetLastInputInfo：一次系统调用，开销可忽略；
+    // 恢复延迟 ≤0.5s，满足「有输入立即恢复」。
+    m_idleTimer = new QTimer(this);
+    m_idleTimer->setInterval(500);
+    connect(m_idleTimer, &QTimer::timeout, this, &MainWindow::onIdleTick);
     layout->addWidget(powerBox);
 
     // ---- 外观（原工具页）----
@@ -1847,6 +1888,19 @@ void MainWindow::loadSettings()
     m_pauseOnLock->setChecked(s.value(QStringLiteral("pauseOnLock"), true).toBool());
     m_pauseOnBattery->setChecked(s.value(QStringLiteral("pauseOnBattery"), false).toBool());
     m_pauseOnFullscreen->setChecked(s.value(QStringLiteral("pauseOnFullscreen"), true).toBool());
+    // ---- V4.16：空闲暂停 ----
+    m_pauseOnIdle->setChecked(s.value(QStringLiteral("pauseOnIdle"), false).toBool());
+    m_idleMinutesSpin->setValue(
+        qBound(1, s.value(QStringLiteral("idlePauseMinutes"), 5).toInt(), 120));
+    // 数字框的可用态与复选框联动；上面 setChecked 会触发 toggled，这里再兜一次
+    m_idleMinutesSpin->setEnabled(m_pauseOnIdle->isChecked());
+    if (m_idleTimer) {
+        if (m_pauseOnIdle->isChecked()) {
+            m_idleTimer->start();
+        } else {
+            m_idleTimer->stop();
+        }
+    }
     // ---- V4.9：远程会话与逐应用规则 ----
     if (m_pauseOnRemote) {
         m_pauseOnRemote->setChecked(s.value(QStringLiteral("pauseOnRemote"), true).toBool());
@@ -2075,6 +2129,9 @@ void MainWindow::saveSettings()
     s.setValue(QStringLiteral("pauseOnLock"), m_pauseOnLock->isChecked());
     s.setValue(QStringLiteral("pauseOnBattery"), m_pauseOnBattery->isChecked());
     s.setValue(QStringLiteral("pauseOnFullscreen"), m_pauseOnFullscreen->isChecked());
+    // ---- V4.16：空闲暂停 ----
+    s.setValue(QStringLiteral("pauseOnIdle"), m_pauseOnIdle->isChecked());
+    s.setValue(QStringLiteral("idlePauseMinutes"), m_idleMinutesSpin->value());
     // ---- V4.9：远程会话与逐应用规则 ----
     if (m_pauseOnRemote) {
         s.setValue(QStringLiteral("pauseOnRemote"), m_pauseOnRemote->isChecked());
@@ -4216,7 +4273,8 @@ void MainWindow::evaluatePausePolicy()
     // 规则显式「忽略」时，全屏暂停对它不生效；其余原因照常累加。
     const bool fullscreenEffective = m_fullscreenPaused && !m_appRuleIgnored;
     const bool want = m_manualPaused || m_lockPaused || m_batteryPaused
-                      || fullscreenEffective || m_remotePaused || m_appRulePaused;
+                      || fullscreenEffective || m_remotePaused || m_appRulePaused
+                      || m_idlePaused;
     if (want != m_videoPaused) {
         applyVideoPaused(want, !m_manualPaused);
     }
@@ -4241,6 +4299,9 @@ void MainWindow::evaluatePausePolicy()
     }
     if (m_appRulePaused) {
         reasons << QStringLiteral("应用规则");
+    }
+    if (m_idlePaused) {
+        reasons << QStringLiteral("空闲 %1 分钟").arg(m_idleMinutesSpin->value());
     }
     m_pauseStateLabel->setText(
         reasons.isEmpty()
@@ -4290,6 +4351,42 @@ void MainWindow::onAppRuleTick()
     } else if (ignored) {
         Logger::info(QStringLiteral("应用规则命中：%1 → 忽略全屏暂停")
                          .arg(FullscreenGuard::foregroundExeName()));
+    }
+    evaluatePausePolicy();
+}
+
+void MainWindow::onIdleTick()
+{
+    if (!m_pauseOnIdle || !m_pauseOnIdle->isChecked()) {
+        return;
+    }
+    if (m_engine.currentVideo().isEmpty()) {
+        return; // 没有视频壁纸，无所谓暂停
+    }
+    LASTINPUTINFO li;
+    li.cbSize = sizeof(li);
+    if (!GetLastInputInfo(&li)) {
+        return;
+    }
+    // GetTickCount 与 dwTime 同一时基，无符号减法天然处理 49.7 天回绕
+    const DWORD idleMs = GetTickCount() - li.dwTime;
+    const int minutes = m_idleMinutesSpin->value();
+    const bool idle = idleMs >= static_cast<DWORD>(minutes) * 60u * 1000u;
+    const bool changed = idle != m_idlePaused;
+    m_idlePaused = idle;
+    // 判定没变、且播放器状态与标志一致时才可以直接返回。
+    // 例外：标志是「该暂停」但播放器没暂停（应用新壁纸时被复位过），要重新按策略执行。
+    if (!changed && idle == m_videoPaused) {
+        return;
+    }
+    if (changed && idle) {
+        Logger::info(QStringLiteral("空闲暂停：已 %1 秒无键鼠输入（阈值 %2 分钟）")
+                         .arg(idleMs / 1000)
+                         .arg(minutes));
+        updateStatus(QStringLiteral("检测到长时间无操作，视频壁纸已暂停（有输入立即恢复）"));
+    } else if (changed) {
+        Logger::info(QStringLiteral("检测到键鼠输入，取消空闲暂停"));
+        updateStatus(QStringLiteral("检测到输入，视频壁纸继续播放"));
     }
     evaluatePausePolicy();
 }
