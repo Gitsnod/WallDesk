@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <QFileInfo>
+#include <QSet>
 #include <QTimer>
 #include <cstring>
 #include <string>
@@ -106,4 +108,73 @@ void FullscreenGuard::setActive(bool active)
 {
     m_active = active;
     emit fullscreenChanged(active);
+}
+
+QString FullscreenGuard::foregroundExeName()
+{
+    const HWND hwnd = GetForegroundWindow();
+    if (!hwnd) {
+        return QString();
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0) {
+        return QString();
+    }
+    const HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!proc) {
+        return QString(); // 系统进程或受保护进程，拒绝访问属正常
+    }
+    wchar_t buf[MAX_PATH * 2] = {0};
+    DWORD size = static_cast<DWORD>(sizeof(buf) / sizeof(buf[0]));
+    QString name;
+    if (QueryFullProcessImageNameW(proc, 0, buf, &size) && size > 0) {
+        name = QFileInfo(QString::fromWCharArray(buf, static_cast<int>(size))).fileName().toLower();
+    }
+    CloseHandle(proc);
+    return name;
+}
+
+namespace {
+
+/** EnumWindows 回调：把可见、非工具窗口的进程名塞进集合。 */
+BOOL CALLBACK collectProcessNames(HWND hwnd, LPARAM param)
+{
+    if (!IsWindowVisible(hwnd)) {
+        return TRUE;
+    }
+    const LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if ((exStyle & WS_EX_TOOLWINDOW) != 0) {
+        return TRUE; // 托盘气泡、输入法候选框一类的辅助窗口
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0) {
+        return TRUE;
+    }
+    auto* names = reinterpret_cast<QSet<QString>*>(param);
+    const HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!proc) {
+        return TRUE;
+    }
+    wchar_t buf[MAX_PATH * 2] = {0};
+    DWORD size = static_cast<DWORD>(sizeof(buf) / sizeof(buf[0]));
+    if (QueryFullProcessImageNameW(proc, 0, buf, &size) && size > 0) {
+        names->insert(QFileInfo(QString::fromWCharArray(buf, static_cast<int>(size)))
+                          .fileName()
+                          .toLower());
+    }
+    CloseHandle(proc);
+    return TRUE;
+}
+
+} // namespace
+
+QStringList FullscreenGuard::windowProcessNames()
+{
+    QSet<QString> names;
+    EnumWindows(&collectProcessNames, reinterpret_cast<LPARAM>(&names));
+    QStringList out(names.begin(), names.end());
+    out.sort();
+    return out;
 }

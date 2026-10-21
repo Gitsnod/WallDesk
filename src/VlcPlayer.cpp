@@ -249,23 +249,10 @@ void VlcPlayer::setProfile(VlcProfile profile)
     m_profile = profile;
 }
 
-QStringList VlcPlayer::instanceArguments() const
+QStringList VlcPlayer::profileArguments(VlcProfile profile)
 {
     QStringList args;
-    args << QStringLiteral("--no-video-title-show")
-         << QStringLiteral("--no-video-deco")
-         << QStringLiteral("--no-osd")
-         << QStringLiteral("--no-stats")
-         << QStringLiteral("--quiet")
-         << QStringLiteral("--aout=mmdevice")
-         // 不扫描同名字幕、不联网抓元数据：省掉两次无谓 IO，冷启动更快
-         << QStringLiteral("--no-sub-autodetect-file")
-         << QStringLiteral("--no-metadata-network-access")
-         << QStringLiteral("--file-caching=300")
-         << QStringLiteral("--network-caching=300")
-         << QStringLiteral("--clock-jitter=0");
-
-    switch (m_profile) {
+    switch (profile) {
     case VlcProfile::Auto:
         // 卡顿时宁可丢帧也不拖慢系统
         args << QStringLiteral("--drop-late-frames") << QStringLiteral("--skip-frames");
@@ -283,7 +270,34 @@ QStringList VlcPlayer::instanceArguments() const
         args << QStringLiteral("--avcodec-hw=any") << QStringLiteral("--vout=direct3d11")
              << QStringLiteral("--avcodec-threads=0");
         break;
+    case VlcProfile::PowerSave:
+        // V4.9 省电档：仍走硬解，但把解码线程压到 2 条并允许丢帧。
+        // 对 1080p/4K 的 H.264/HEVC 通常够用，笔记本与小主机上比 Auto 更省。
+        args << QStringLiteral("--avcodec-hw=any") << QStringLiteral("--vout=direct3d11")
+             << QStringLiteral("--avcodec-threads=2")
+             << QStringLiteral("--drop-late-frames") << QStringLiteral("--skip-frames");
+        break;
     }
+    return args;
+}
+
+QStringList VlcPlayer::instanceArguments() const
+{
+    QStringList args;
+    args << QStringLiteral("--no-video-title-show")
+         << QStringLiteral("--no-video-deco")
+         << QStringLiteral("--no-osd")
+         << QStringLiteral("--no-stats")
+         << QStringLiteral("--quiet")
+         << QStringLiteral("--aout=mmdevice")
+         // 不扫描同名字幕、不联网抓元数据：省掉两次无谓 IO，冷启动更快
+         << QStringLiteral("--no-sub-autodetect-file")
+         << QStringLiteral("--no-metadata-network-access")
+         << QStringLiteral("--file-caching=300")
+         << QStringLiteral("--network-caching=300")
+         << QStringLiteral("--clock-jitter=0");
+
+    args << profileArguments(m_profile);
     return args;
 }
 

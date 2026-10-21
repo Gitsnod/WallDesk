@@ -27,6 +27,8 @@ signals:
     void systemSuspending();   // 即将进入休眠/睡眠
     void systemResumed();      // 已从休眠恢复
     void sessionLocked(bool locked); // 锁屏 / 解锁
+    /** 远程桌面连接 / 断开（V4.9）：主机侧据此暂停壁纸，省 GPU 与上行带宽。 */
+    void remoteSessionChanged(bool connected);
     void displayChanged();     // 显示器插拔或分辨率变化
     void powerStatusChanged(); // 交流 / 电池供电切换
 

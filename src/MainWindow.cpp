@@ -15,6 +15,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <algorithm>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -31,6 +32,7 @@
 #include <QGroupBox>
 #include <QHash>
 #include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
 #include <QLabel>
@@ -329,6 +331,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_online, &OnlineSources::progress, this, &MainWindow::onOnlineProgress);
 
     setupWatcher();
+    // V4.9：启动时若本身就在远程会话里，直接按「远程」原因进入暂停
+    m_remotePaused = GetSystemMetrics(SM_REMOTESESSION) != 0;
     loadSettings();
     applyTheme();
     setupTray();
@@ -357,6 +361,8 @@ void MainWindow::setupWatcher()
     connect(m_watcher, &DesktopWatcher::sessionLocked, this, &MainWindow::onSessionLock);
     connect(m_watcher, &DesktopWatcher::displayChanged, this, &MainWindow::onDisplayChanged);
     connect(m_watcher, &DesktopWatcher::powerStatusChanged, this, &MainWindow::onPowerStatusChanged);
+    connect(m_watcher, &DesktopWatcher::remoteSessionChanged, this,
+            &MainWindow::onRemoteSessionChanged);
     connect(&m_engine, &WallpaperEngine::videoFailed, this, &MainWindow::onVideoFailed);
     connect(&m_engine, &WallpaperEngine::videoRecovered, this, &MainWindow::onVideoRecovered);
 }
@@ -896,6 +902,8 @@ QWidget* MainWindow::buildSettingsPage()
     m_profileCombo->addItem(QStringLiteral("硬件解码优先"), static_cast<int>(VlcProfile::Hardware));
     m_profileCombo->addItem(QStringLiteral("软件解码（兼容）"), static_cast<int>(VlcProfile::Software));
     m_profileCombo->addItem(QStringLiteral("高画质"), static_cast<int>(VlcProfile::Quality));
+    m_profileCombo->addItem(QStringLiteral("省电（限制解码线程）"),
+                            static_cast<int>(VlcProfile::PowerSave));
     m_profileCombo->setToolTip(QStringLiteral(
         "硬件解码省电但对显卡/驱动有要求；软件解码最稳但 CPU 占用高。切换会重建解码实例并续播。"));
     videoForm->addRow(QStringLiteral("解码档位"), m_profileCombo);
@@ -953,6 +961,60 @@ QWidget* MainWindow::buildSettingsPage()
     strategyForm->addRow(QStringLiteral("方式"), m_switchModeCombo);
     strategyForm->addRow(QStringLiteral("范围"), m_switchScopeCombo);
     layout->addWidget(strategyBox);
+
+    // ---- 资源控制：远程会话 + 逐应用规则（V4.9）----
+    auto* ruleBox = new QGroupBox(QStringLiteral("资源控制"), pane);
+    auto* ruleLayout = new QVBoxLayout(ruleBox);
+    ruleLayout->setContentsMargins(9, 6, 9, 6);
+
+    m_pauseOnRemote = new QCheckBox(QStringLiteral("远程桌面连接时暂停"), ruleBox);
+    m_pauseOnRemote->setToolTip(QStringLiteral(
+        "被远程控制时，桌面画面要编码后经网络上行，继续解码只会白耗 GPU。\n"
+        "远程会话断开后自动恢复播放。"));
+    connect(m_pauseOnRemote, &QCheckBox::toggled, this, [this](bool) { saveSettings(); });
+    ruleLayout->addWidget(m_pauseOnRemote);
+
+    m_appRulesEnabled = new QCheckBox(QStringLiteral("启用逐应用规则"), ruleBox);
+    m_appRulesEnabled->setToolTip(QStringLiteral(
+        "按「前台窗口所属进程」决定壁纸去留，自上而下匹配，第一条命中即生效：\n"
+        "「暂停」= 该程序在前台时暂停壁纸；\n"
+        "「忽略」= 该程序在前台时即使触发了全屏暂停也继续播放。"));
+    connect(m_appRulesEnabled, &QCheckBox::toggled, this, [this](bool) {
+        updateFullscreenGuard();
+        onAppRuleTick();
+        saveSettings();
+    });
+    ruleLayout->addWidget(m_appRulesEnabled);
+
+    m_ruleList = new QListWidget(ruleBox);
+    m_ruleList->setMaximumHeight(110);
+    m_ruleList->setToolTip(QStringLiteral("双击一行可切换动作"));
+    connect(m_ruleList, &QListWidget::itemDoubleClicked, this, &MainWindow::onToggleAppRule);
+    ruleLayout->addWidget(m_ruleList);
+
+    auto* ruleButtons = new QHBoxLayout();
+    auto* addRule = new QPushButton(QStringLiteral("添加…"), ruleBox);
+    auto* toggleRule = new QPushButton(QStringLiteral("切换动作"), ruleBox);
+    auto* delRule = new QPushButton(QStringLiteral("删除"), ruleBox);
+    connect(addRule, &QPushButton::clicked, this, &MainWindow::onAddAppRule);
+    connect(toggleRule, &QPushButton::clicked, this, &MainWindow::onToggleAppRule);
+    connect(delRule, &QPushButton::clicked, this, &MainWindow::onRemoveAppRule);
+    ruleButtons->addWidget(addRule);
+    ruleButtons->addWidget(toggleRule);
+    ruleButtons->addWidget(delRule);
+    ruleButtons->addStretch(1);
+    ruleLayout->addLayout(ruleButtons);
+
+    m_pauseStateLabel = new QLabel(ruleBox);
+    m_pauseStateLabel->setWordWrap(true);
+    m_pauseStateLabel->setText(QStringLiteral("当前暂停原因：无"));
+    ruleLayout->addWidget(m_pauseStateLabel);
+    layout->addWidget(ruleBox);
+
+    // 规则轮询：只有「开了规则 + 正在播视频」时才跑（见 updateFullscreenGuard）
+    m_ruleTimer = new QTimer(this);
+    m_ruleTimer->setInterval(1500);
+    connect(m_ruleTimer, &QTimer::timeout, this, &MainWindow::onAppRuleTick);
 
     // ---- 定时场景（V4.6）----
     auto* sceneBox = new QGroupBox(QStringLiteral("定时场景"), pane);
@@ -1118,6 +1180,37 @@ QWidget* MainWindow::buildSettingsPage()
     presetForm->addRow(QString(), presetNote);
     layout->addWidget(presetBox);
 
+    // ---- 触发规则：某程序进入前台时自动套用预设（V4.9）----
+    auto* triggerBox = new QGroupBox(QStringLiteral("触发规则"), pane);
+    auto* triggerLayout = new QVBoxLayout(triggerBox);
+    triggerLayout->setContentsMargins(9, 6, 9, 6);
+    auto* triggerHint = new QLabel(
+        QStringLiteral("指定程序进入前台时，自动套用某个场景预设。\n"
+                       "每个程序只保留一条；切到其它程序不会自动切回。"),
+        triggerBox);
+    triggerHint->setWordWrap(true);
+    triggerLayout->addWidget(triggerHint);
+
+    m_triggerList = new QListWidget(triggerBox);
+    m_triggerList->setMaximumHeight(90);
+    triggerLayout->addWidget(m_triggerList);
+
+    auto* triggerButtons = new QHBoxLayout();
+    auto* addTrigger = new QPushButton(QStringLiteral("添加…"), triggerBox);
+    auto* delTrigger = new QPushButton(QStringLiteral("删除"), triggerBox);
+    connect(addTrigger, &QPushButton::clicked, this, &MainWindow::onAddTrigger);
+    connect(delTrigger, &QPushButton::clicked, this, &MainWindow::onRemoveTrigger);
+    triggerButtons->addWidget(addTrigger);
+    triggerButtons->addWidget(delTrigger);
+    triggerButtons->addStretch(1);
+    triggerLayout->addLayout(triggerButtons);
+    layout->addWidget(triggerBox);
+
+    m_triggerTimer = new QTimer(this);
+    m_triggerTimer->setInterval(2500);
+    connect(m_triggerTimer, &QTimer::timeout, this, &MainWindow::onTriggerTick);
+    m_triggerTimer->start();
+
     // ---- 省电 ----
     auto* powerBox = new QGroupBox(QStringLiteral("省电"), pane);
     auto* powerForm = new QFormLayout(powerBox);
@@ -1235,8 +1328,8 @@ QWidget* MainWindow::buildSettingsPage()
         m_settingsPages.append(boxes);
     };
     addPage(QStringLiteral("壁纸"), {imageBox});
-    addPage(QStringLiteral("播放"), {videoBox, autoBox, strategyBox});
-    addPage(QStringLiteral("场景"), {sceneBox, presetBox});
+    addPage(QStringLiteral("播放"), {videoBox, autoBox, strategyBox, ruleBox});
+    addPage(QStringLiteral("场景"), {sceneBox, presetBox, triggerBox});
     addPage(QStringLiteral("外观与效果"), {fxBox, widgetBox, audioBox, lookBox});
     addPage(QStringLiteral("高级"), {powerBox, miscBox});
 
@@ -1506,6 +1599,40 @@ void MainWindow::loadSettings()
     m_pauseOnLock->setChecked(s.value(QStringLiteral("pauseOnLock"), true).toBool());
     m_pauseOnBattery->setChecked(s.value(QStringLiteral("pauseOnBattery"), false).toBool());
     m_pauseOnFullscreen->setChecked(s.value(QStringLiteral("pauseOnFullscreen"), true).toBool());
+    // ---- V4.9：远程会话与逐应用规则 ----
+    if (m_pauseOnRemote) {
+        m_pauseOnRemote->setChecked(s.value(QStringLiteral("pauseOnRemote"), true).toBool());
+    }
+    if (m_appRulesEnabled) {
+        m_appRulesEnabled->setChecked(s.value(QStringLiteral("appRulesEnabled"), false).toBool());
+    }
+    m_appRules.clear();
+    // 用换行分隔的普通字符串存，而不是 QStringList：
+    // QSettings 在注册表里对 QStringList 用的是 Qt 私有编码，手改/工具注入读不回来，
+    // 排查与测试都很别扭；换行串是 REG_SZ，人可读、可手改（V4.9）。
+    const QStringList storedRules =
+        s.value(QStringLiteral("appRules")).toString().split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString& entry : storedRules) {
+        const QStringList parts = entry.split(QLatin1Char('|'));
+        if (parts.size() == 2 && !parts.at(0).trimmed().isEmpty()) {
+            m_appRules.append({parts.at(0).trimmed().toLower(), parts.at(1).toInt()});
+        }
+    }
+    refreshRuleList();
+    // ---- V4.9：触发规则（进程 → 预设）----
+    m_triggers.clear();
+    for (const QString& entry : s.value(QStringLiteral("triggers")).toString().split(
+             QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+        const QStringList parts = entry.split(QLatin1Char('|'));
+        if (parts.size() == 2 && !parts.at(0).trimmed().isEmpty()
+            && !parts.at(1).trimmed().isEmpty()) {
+            m_triggers.append({parts.at(0).trimmed().toLower(), parts.at(1).trimmed()});
+        }
+    }
+    refreshTriggerList();
+    Logger::info(QStringLiteral("配置载入：应用规则 %1 条，触发规则 %2 条")
+                     .arg(m_appRules.size())
+                     .arg(m_triggers.size()));
     m_videoThumbnails->setChecked(s.value(QStringLiteral("videoThumbnails"), true).toBool());
     m_restoreLast->setChecked(s.value(QStringLiteral("restoreLast"), true).toBool());
     m_autoStart->setChecked(isAutoStartEnabled());
@@ -1693,6 +1820,23 @@ void MainWindow::saveSettings()
     s.setValue(QStringLiteral("pauseOnLock"), m_pauseOnLock->isChecked());
     s.setValue(QStringLiteral("pauseOnBattery"), m_pauseOnBattery->isChecked());
     s.setValue(QStringLiteral("pauseOnFullscreen"), m_pauseOnFullscreen->isChecked());
+    // ---- V4.9：远程会话与逐应用规则 ----
+    if (m_pauseOnRemote) {
+        s.setValue(QStringLiteral("pauseOnRemote"), m_pauseOnRemote->isChecked());
+    }
+    if (m_appRulesEnabled) {
+        s.setValue(QStringLiteral("appRulesEnabled"), m_appRulesEnabled->isChecked());
+    }
+    QStringList ruleLines;
+    for (const auto& rule : m_appRules) {
+        ruleLines << QStringLiteral("%1|%2").arg(rule.first).arg(rule.second);
+    }
+    s.setValue(QStringLiteral("appRules"), ruleLines.join(QLatin1Char('\n')));
+    QStringList triggerLines;
+    for (const auto& trigger : m_triggers) {
+        triggerLines << QStringLiteral("%1|%2").arg(trigger.first, trigger.second);
+    }
+    s.setValue(QStringLiteral("triggers"), triggerLines.join(QLatin1Char('\n')));
     s.setValue(QStringLiteral("videoThumbnails"), m_videoThumbnails->isChecked());
     s.setValue(QStringLiteral("restoreLast"), m_restoreLast->isChecked());
 
@@ -2795,6 +2939,11 @@ void MainWindow::refreshBackendInfo()
                              && path.startsWith(VlcBundle::cacheDir(), Qt::CaseInsensitive);
         Logger::info(QStringLiteral("视频后端已加载：%1%2")
                          .arg(path, bundled ? QStringLiteral("（内置）") : QString()));
+        // V4.9：把「所选档位 → 实际下发的 libVLC 参数」写进日志，
+        // 让「选了硬解到底生效没有」可查，而不是只有一个下拉框。
+        Logger::info(QStringLiteral("解码档位：%1；档位参数：%2")
+                         .arg(m_profileCombo ? m_profileCombo->currentText() : QStringLiteral("-"),
+                              m_engine.performanceArguments().join(QLatin1Char(' '))));
     } else {
         Logger::warning(QStringLiteral("视频后端未加载，仅图片壁纸可用"));
     }
@@ -2971,11 +3120,23 @@ void MainWindow::finishBackendLoad()
 
 void MainWindow::updateFullscreenGuard()
 {
+    const bool hasVideo = !m_engine.currentVideo().isEmpty() && m_engine.videoBackendReady();
     // 只有在真的有视频在播、且用户开了这个开关时才轮询，避免无谓唤醒
-    const bool wanted = m_pauseOnFullscreen->isChecked()
-                        && !m_engine.currentVideo().isEmpty()
-                        && m_engine.videoBackendReady();
+    const bool wanted = m_pauseOnFullscreen->isChecked() && hasVideo;
     m_fullscreen->setEnabled(wanted);
+
+    // V4.9：逐应用规则只在「规则启用 + 有规则 + 正在播视频」时轮询
+    if (m_ruleTimer) {
+        const bool rulesWanted = m_appRulesEnabled && m_appRulesEnabled->isChecked()
+                                 && !m_appRules.isEmpty() && hasVideo;
+        if (rulesWanted && !m_ruleTimer->isActive()) {
+            m_ruleTimer->start();
+            onAppRuleTick();
+        } else if (!rulesWanted && m_ruleTimer->isActive()) {
+            m_ruleTimer->stop();
+            onAppRuleTick(); // 停表时清一次状态，避免卡在「由规则暂停」
+        }
+    }
 }
 
 // ---------------------------------------------------------------- 槽函数
@@ -3083,7 +3244,10 @@ void MainWindow::onStop()
 
 void MainWindow::onTogglePause()
 {
-    applyVideoPaused(!m_videoPaused);
+    // 手动是独立的一种暂停原因：策略仍成立时点「继续」不会真的恢复，
+    // 状态标签会写明还卡在哪一条原因上（V4.9）。
+    m_manualPaused = !m_manualPaused;
+    evaluatePausePolicy();
 }
 
 void MainWindow::onAutoSwitchToggled(bool enabled)
@@ -3104,10 +3268,9 @@ void MainWindow::onSystemResume()
     if (m_engine.currentVideo().isEmpty()) {
         return;
     }
-    // 休眠唤醒后桌面层句柄通常已失效，重新挂载并从上次位置续播
-    if (m_videoPaused && m_pausedByPolicy) {
-        applyVideoPaused(false);
-    }
+    // 休眠唤醒后桌面层句柄通常已失效，重新挂载并从上次位置续播。
+    // 暂停状态交给策略层重新判定——休眠本身不是暂停原因，不会凭空恢复播放（V4.9）。
+    evaluatePausePolicy();
     if (m_engine.reattach()) {
         updateStatus(QStringLiteral("已从休眠恢复，视频壁纸已重新挂载"));
     }
@@ -3118,16 +3281,11 @@ void MainWindow::onSessionLock(bool locked)
     if (m_engine.currentVideo().isEmpty()) {
         return;
     }
-    if (locked) {
-        if (m_pauseOnLock->isChecked()) {
-            applyVideoPaused(true, true);
-        }
-        return;
+    m_lockPaused = locked && m_pauseOnLock->isChecked();
+    evaluatePausePolicy();
+    if (!locked) {
+        m_engine.reattach(); // 解锁后桌面层可能已重建
     }
-    if (m_videoPaused && m_pausedByPolicy) {
-        applyVideoPaused(false);
-    }
-    m_engine.reattach(); // 解锁后桌面层可能已重建
 }
 
 void MainWindow::onDisplayChanged()
@@ -3138,18 +3296,17 @@ void MainWindow::onDisplayChanged()
 
 void MainWindow::onPowerStatusChanged()
 {
-    if (m_engine.currentVideo().isEmpty() || !m_pauseOnBattery->isChecked()) {
+    if (m_engine.currentVideo().isEmpty()) {
         return;
     }
     SYSTEM_POWER_STATUS status;
     if (!GetSystemPowerStatus(&status)) {
         return;
     }
-    const bool onBattery = (status.ACLineStatus != kAcLineOnAc);
-    if (onBattery) {
-        applyVideoPaused(true, true);
-    } else if (m_videoPaused && m_pausedByPolicy) {
-        applyVideoPaused(false);
+    const bool wasPaused = m_videoPaused;
+    m_batteryPaused = (status.ACLineStatus != kAcLineOnAc) && m_pauseOnBattery->isChecked();
+    evaluatePausePolicy();
+    if (wasPaused && !m_videoPaused) {
         m_engine.reattach();
     }
 }
@@ -3159,17 +3316,314 @@ void MainWindow::onFullscreenChanged(bool active)
     if (m_engine.currentVideo().isEmpty()) {
         return;
     }
-    if (active) {
-        if (m_pauseOnFullscreen->isChecked()) {
-            applyVideoPaused(true, true);
-            updateStatus(QStringLiteral("检测到全屏应用，已暂停视频壁纸以节省资源"));
-        }
-        return;
-    }
-    if (m_videoPaused && m_pausedByPolicy) {
-        applyVideoPaused(false);
+    const bool wasPaused = m_videoPaused;
+    m_fullscreenPaused = active && m_pauseOnFullscreen->isChecked();
+    evaluatePausePolicy();
+
+    if (active && m_fullscreenPaused) {
+        updateStatus(QStringLiteral("检测到全屏应用，已暂停视频壁纸以节省资源"));
+    } else if (wasPaused && !m_videoPaused) {
         updateStatus(QStringLiteral("已退出全屏，视频壁纸继续播放"));
     }
+}
+
+void MainWindow::evaluatePausePolicy()
+{
+    // 规则显式「忽略」时，全屏暂停对它不生效；其余原因照常累加。
+    const bool fullscreenEffective = m_fullscreenPaused && !m_appRuleIgnored;
+    const bool want = m_manualPaused || m_lockPaused || m_batteryPaused
+                      || fullscreenEffective || m_remotePaused || m_appRulePaused;
+    if (want != m_videoPaused) {
+        applyVideoPaused(want, !m_manualPaused);
+    }
+    if (!m_pauseStateLabel) {
+        return;
+    }
+    QStringList reasons;
+    if (m_manualPaused) {
+        reasons << QStringLiteral("手动暂停");
+    }
+    if (m_lockPaused) {
+        reasons << QStringLiteral("锁屏");
+    }
+    if (m_batteryPaused) {
+        reasons << QStringLiteral("电池供电");
+    }
+    if (fullscreenEffective) {
+        reasons << QStringLiteral("全屏应用");
+    }
+    if (m_remotePaused) {
+        reasons << QStringLiteral("远程会话");
+    }
+    if (m_appRulePaused) {
+        reasons << QStringLiteral("应用规则");
+    }
+    m_pauseStateLabel->setText(
+        reasons.isEmpty()
+            ? QStringLiteral("当前暂停原因：无")
+            : QStringLiteral("当前暂停原因：%1").arg(reasons.join(QStringLiteral(" / "))));
+}
+
+bool MainWindow::appRulePausesForeground(bool* matched) const
+{
+    if (matched) {
+        *matched = false;
+    }
+    if (m_appRules.isEmpty() || !m_appRulesEnabled || !m_appRulesEnabled->isChecked()) {
+        return false;
+    }
+    const QString exe = FullscreenGuard::foregroundExeName();
+    if (exe.isEmpty()) {
+        return false;
+    }
+    for (const auto& rule : m_appRules) {
+        if (rule.first == exe) {
+            if (matched) {
+                *matched = true;
+            }
+            return rule.second == 0;
+        }
+    }
+    return false;
+}
+
+void MainWindow::onAppRuleTick()
+{
+    const bool previousPause = m_appRulePaused;
+    bool matched = false;
+    const bool pause = appRulePausesForeground(&matched);
+    const bool ignored = matched && !pause;
+    if (pause == m_appRulePaused && ignored == m_appRuleIgnored) {
+        return; // 判定没变就别动播放器
+    }
+    m_appRulePaused = pause;
+    m_appRuleIgnored = ignored;
+
+    if (pause && !previousPause) {
+        const QString exe = FullscreenGuard::foregroundExeName();
+        Logger::info(QStringLiteral("应用规则命中：%1 → 暂停壁纸").arg(exe));
+        updateStatus(QStringLiteral("应用规则命中（%1），已暂停视频壁纸").arg(exe));
+    } else if (ignored) {
+        Logger::info(QStringLiteral("应用规则命中：%1 → 忽略全屏暂停")
+                         .arg(FullscreenGuard::foregroundExeName()));
+    }
+    evaluatePausePolicy();
+}
+
+void MainWindow::onRemoteSessionChanged(bool connected)
+{
+    m_remotePaused = connected && m_pauseOnRemote && m_pauseOnRemote->isChecked();
+    Logger::info(QStringLiteral("远程会话%1%2")
+                     .arg(connected ? QStringLiteral("已连接") : QStringLiteral("已断开"),
+                          m_remotePaused ? QStringLiteral("，壁纸已暂停") : QString()));
+    if (m_engine.currentVideo().isEmpty()) {
+        return;
+    }
+    evaluatePausePolicy();
+}
+
+void MainWindow::refreshRuleList()
+{
+    if (!m_ruleList) {
+        return;
+    }
+    const int keep = m_ruleList->currentRow();
+    m_ruleList->clear();
+    for (const auto& rule : m_appRules) {
+        m_ruleList->addItem(QStringLiteral("%1    →    %2")
+                                .arg(rule.first,
+                                     rule.second == 0 ? QStringLiteral("暂停")
+                                                      : QStringLiteral("忽略全屏暂停")));
+    }
+    if (keep >= 0 && keep < m_ruleList->count()) {
+        m_ruleList->setCurrentRow(keep);
+    }
+}
+
+void MainWindow::onAddAppRule()
+{
+    const QStringList running = FullscreenGuard::windowProcessNames();
+    if (running.isEmpty()) {
+        updateStatus(QStringLiteral("没有可选的进程（可能全部无法访问）"), true);
+        return;
+    }
+    const QString current = FullscreenGuard::foregroundExeName();
+    bool ok = false;
+    const QString exe = QInputDialog::getItem(
+        this, QStringLiteral("添加应用规则"),
+        QStringLiteral("进程（可直接输入，如 chrome.exe）："), running,
+        qMax(0, static_cast<int>(running.indexOf(current))), true, &ok);
+    if (!ok || exe.trimmed().isEmpty()) {
+        return;
+    }
+    const QString normalized = QFileInfo(exe.trimmed()).fileName().toLower();
+
+    const QStringList actions{QStringLiteral("暂停（该程序在前台时停掉壁纸）"),
+                              QStringLiteral("忽略全屏暂停（该程序全屏时继续播放）")};
+    const QString action = QInputDialog::getItem(this, QStringLiteral("添加应用规则"),
+                                                 QStringLiteral("动作："), actions, 0, false, &ok);
+    if (!ok) {
+        return;
+    }
+
+    // 同一进程只保留一条，新规则覆盖旧规则
+    for (int i = m_appRules.size() - 1; i >= 0; --i) {
+        if (m_appRules.at(i).first == normalized) {
+            m_appRules.removeAt(i);
+        }
+    }
+    m_appRules.append({normalized, action == actions.at(0) ? 0 : 1});
+    refreshRuleList();
+    saveSettings();
+    if (m_appRulesEnabled && !m_appRulesEnabled->isChecked()) {
+        m_appRulesEnabled->setChecked(true);
+    }
+    onAppRuleTick();
+    updateStatus(QStringLiteral("已添加规则：%1").arg(normalized));
+}
+
+void MainWindow::onRemoveAppRule()
+{
+    const int row = m_ruleList ? m_ruleList->currentRow() : -1;
+    if (row < 0 || row >= m_appRules.size()) {
+        updateStatus(QStringLiteral("先在列表里选中一条规则"), true);
+        return;
+    }
+    const QString exe = m_appRules.at(row).first;
+    m_appRules.removeAt(row);
+    refreshRuleList();
+    saveSettings();
+    onAppRuleTick();
+    updateStatus(QStringLiteral("已删除规则：%1").arg(exe));
+}
+
+void MainWindow::onToggleAppRule()
+{
+    const int row = m_ruleList ? m_ruleList->currentRow() : -1;
+    if (row < 0 || row >= m_appRules.size()) {
+        updateStatus(QStringLiteral("先在列表里选中一条规则"), true);
+        return;
+    }
+    m_appRules[row].second = (m_appRules.at(row).second == 0) ? 1 : 0;
+    refreshRuleList();
+    if (m_ruleList) {
+        m_ruleList->setCurrentRow(row);
+    }
+    saveSettings();
+    onAppRuleTick();
+}
+
+void MainWindow::refreshTriggerList()
+{
+    if (!m_triggerList) {
+        return;
+    }
+    const int keep = m_triggerList->currentRow();
+    m_triggerList->clear();
+    for (const auto& trigger : m_triggers) {
+        m_triggerList->addItem(
+            QStringLiteral("%1    →    预设「%2」").arg(trigger.first, trigger.second));
+    }
+    if (keep >= 0 && keep < m_triggerList->count()) {
+        m_triggerList->setCurrentRow(keep);
+    }
+}
+
+void MainWindow::onTriggerTick()
+{
+    if (m_triggers.isEmpty()) {
+        return;
+    }
+    const QString exe = FullscreenGuard::foregroundExeName();
+    if (exe.isEmpty() || exe == m_lastForegroundExe) {
+        return; // 还是同一个程序，不重复套用
+    }
+    m_lastForegroundExe = exe;
+
+    // 自己的窗口在前台时不触发，避免配了「WallDesk.exe」导致自我循环
+    const QString self = QFileInfo(QCoreApplication::applicationFilePath()).fileName().toLower();
+    if (exe == self) {
+        return;
+    }
+
+    for (const auto& trigger : m_triggers) {
+        if (trigger.first != exe) {
+            continue;
+        }
+        const auto it = std::find_if(m_presets.cbegin(), m_presets.cend(),
+                                     [&trigger](const WallpaperPreset& p) {
+                                         return p.name == trigger.second;
+                                     });
+        if (it == m_presets.cend()) {
+            Logger::warning(QStringLiteral("触发规则命中 %1，但预设「%2」不存在")
+                                .arg(exe, trigger.second));
+            return;
+        }
+        Logger::info(QStringLiteral("触发规则命中：%1 → 应用预设「%2」").arg(exe, it->name));
+        applyPreset(*it);
+        updateStatus(QStringLiteral("已按触发规则套用预设「%1」").arg(it->name));
+        return;
+    }
+}
+
+void MainWindow::onAddTrigger()
+{
+    if (m_presets.isEmpty()) {
+        updateStatus(QStringLiteral("还没有场景预设，请先在壁纸库页保存一个预设"), true);
+        return;
+    }
+    const QStringList running = FullscreenGuard::windowProcessNames();
+    if (running.isEmpty()) {
+        updateStatus(QStringLiteral("没有可选的进程（可能全部无法访问）"), true);
+        return;
+    }
+    QStringList presetNames;
+    presetNames.reserve(m_presets.size());
+    for (const auto& preset : m_presets) {
+        presetNames << preset.name;
+    }
+
+    const QString current = FullscreenGuard::foregroundExeName();
+    bool ok = false;
+    const QString exe = QInputDialog::getItem(
+        this, QStringLiteral("添加触发规则"),
+        QStringLiteral("进程（进入前台时触发）："), running,
+        qMax(0, static_cast<int>(running.indexOf(current))), true, &ok);
+    if (!ok || exe.trimmed().isEmpty()) {
+        return;
+    }
+    const QString normalized = QFileInfo(exe.trimmed()).fileName().toLower();
+
+    const QString presetName = QInputDialog::getItem(
+        this, QStringLiteral("添加触发规则"), QStringLiteral("套用预设："), presetNames, 0, false, &ok);
+    if (!ok) {
+        return;
+    }
+
+    for (int i = m_triggers.size() - 1; i >= 0; --i) {
+        if (m_triggers.at(i).first == normalized) {
+            m_triggers.removeAt(i); // 同一程序只保留一条
+        }
+    }
+    m_triggers.append({normalized, presetName});
+    refreshTriggerList();
+    saveSettings();
+    m_lastForegroundExe.clear(); // 让下一次轮询重新判定
+    updateStatus(QStringLiteral("已添加触发规则：%1 → %2").arg(normalized, presetName));
+}
+
+void MainWindow::onRemoveTrigger()
+{
+    const int row = m_triggerList ? m_triggerList->currentRow() : -1;
+    if (row < 0 || row >= m_triggers.size()) {
+        updateStatus(QStringLiteral("先在列表里选中一条触发规则"), true);
+        return;
+    }
+    const QString exe = m_triggers.at(row).first;
+    m_triggers.removeAt(row);
+    refreshTriggerList();
+    saveSettings();
+    updateStatus(QStringLiteral("已删除触发规则：%1").arg(exe));
 }
 
 void MainWindow::onReattach()
@@ -3220,7 +3674,12 @@ void MainWindow::onThemeChanged(int index)
 
 void MainWindow::onProfileChanged(int)
 {
-    m_engine.setPerformanceProfile(static_cast<VlcProfile>(m_profileCombo->currentData().toInt()));
+    const auto profile = static_cast<VlcProfile>(m_profileCombo->currentData().toInt());
+    m_engine.setPerformanceProfile(profile);
+    // V4.9：切换后立刻把实际下发参数写进日志，便于确认档位真的生效
+    Logger::info(QStringLiteral("解码档位切换：%1；档位参数：%2")
+                     .arg(m_profileCombo->currentText(),
+                          VlcPlayer::profileArguments(profile).join(QLatin1Char(' '))));
     saveSettings();
 }
 

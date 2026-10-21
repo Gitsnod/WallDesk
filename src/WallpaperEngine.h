@@ -110,6 +110,8 @@ public:
     /** 切换解码档位。已加载时重建 libvlc 实例并从原位置续播。 */
     void setPerformanceProfile(VlcProfile profile);
     VlcProfile performanceProfile() const { return m_vlc.profile(); }
+    /** 当前档位会下发的 libVLC 参数，用于日志与「关于」诊断（V4.9）。 */
+    QStringList performanceArguments() const;
 
     /** 离线抓帧（生成缩略图用），不干扰正在播放的画面。 */
     bool snapshotVideo(const QString& file, const QString& outPng, int width, int height);

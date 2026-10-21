@@ -791,6 +791,13 @@ bool WallpaperEngine::snapshotVideo(const QString& file, const QString& outPng, 
     return m_vlc.takeSnapshot(file, outPng, width, height);
 }
 
+QStringList WallpaperEngine::performanceArguments() const
+{
+    // 只取档位相关的参数：公共参数（缓存、日志级别等）与本项诊断无关，
+    // 而 instanceArguments() 属于 VlcPlayer 的内部实现，不对外暴露。
+    return VlcPlayer::profileArguments(m_vlc.profile());
+}
+
 void WallpaperEngine::setPerformanceProfile(VlcProfile profile)
 {
     if (m_vlc.profile() == profile) {

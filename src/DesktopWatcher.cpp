@@ -12,6 +12,14 @@
 #ifndef WTS_SESSION_UNLOCK
 #define WTS_SESSION_UNLOCK 0x8
 #endif
+// V4.9：远程会话连接 / 断开。wtsapi32.h 里有定义，但这里全程用运行时加载，
+// 不保证包含顺序，故按同样方式兜底。
+#ifndef WTS_REMOTE_CONNECT
+#define WTS_REMOTE_CONNECT 0x3
+#endif
+#ifndef WTS_REMOTE_DISCONNECT
+#define WTS_REMOTE_DISCONNECT 0x4
+#endif
 
 DesktopWatcher::DesktopWatcher(QObject* parent)
     : QObject(parent)
@@ -92,6 +100,14 @@ bool DesktopWatcher::nativeEventFilter(const QByteArray& eventType, void* messag
         }
         if (msg->wParam == WTS_SESSION_UNLOCK) {
             emit sessionLocked(false);
+            return true;
+        }
+        if (msg->wParam == WTS_REMOTE_CONNECT) {
+            emit remoteSessionChanged(true);
+            return true;
+        }
+        if (msg->wParam == WTS_REMOTE_DISCONNECT) {
+            emit remoteSessionChanged(false);
             return true;
         }
         break;

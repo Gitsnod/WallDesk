@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QList>
 #include <QMainWindow>
+#include <QPair>
 #include <QSystemTrayIcon>
 
 #include "AppTheme.h"
@@ -88,6 +89,10 @@ private slots:
     void onDisplayChanged();
     void onPowerStatusChanged();
     void onFullscreenChanged(bool active);
+    /** 远程桌面连接 / 断开（V4.9）。 */
+    void onRemoteSessionChanged(bool connected);
+    /** 逐应用规则轮询（V4.9）：前台进程命中规则时调整暂停状态。 */
+    void onAppRuleTick();
 
     // 维护与外观
     void onReattach();
@@ -124,6 +129,14 @@ private slots:
     void onPresetApply();
     void onPresetSave();
     void onPresetDelete();
+    // V4.9：逐应用规则
+    void onAddAppRule();
+    void onRemoveAppRule();
+    void onToggleAppRule();
+    // V4.9：触发规则（某程序进入前台时套用预设）
+    void onTriggerTick();
+    void onAddTrigger();
+    void onRemoveTrigger();
     void onUrlImport();
     void onBingDaily();
     void onOnlineImageReady(const QString& localPath);
@@ -167,6 +180,19 @@ private:
     void applyTheme();
     /** byPolicy 表示由省电/锁屏/全屏策略触发，用于区分用户的手动暂停。 */
     void applyVideoPaused(bool paused, bool byPolicy = false);
+    /**
+     * 按下全部暂停原因合成最终状态（V4.9）。
+     *
+     * 所有触发源（手动 / 锁屏 / 电池 / 全屏 / 远程会话 / 逐应用规则）只更新自己的标志位，
+     * 再统一走这里。任一原因仍成立就保持暂停，避免「退出全屏把电池暂停也一起恢复」。
+     */
+    void evaluatePausePolicy();
+    /** 前台进程是否命中「暂停」规则；matched 回填是否命中任意规则。 */
+    bool appRulePausesForeground(bool* matched) const;
+    /** 按 m_appRules 重建规则列表控件。 */
+    void refreshRuleList();
+    /** 按 m_triggers 重建触发规则列表控件。 */
+    void refreshTriggerList();
     void refreshBackendInfo();
     void maybeRestoreLast();
     void applyItem(const MediaItem& item);
@@ -313,6 +339,29 @@ private:
     bool m_forceQuit = false;
     bool m_videoPaused = false;
     bool m_pausedByPolicy = false;
+    // V4.9：暂停原因聚合（见 evaluatePausePolicy）
+    bool m_manualPaused = false;
+    bool m_lockPaused = false;
+    bool m_batteryPaused = false;
+    bool m_fullscreenPaused = false;
+    bool m_remotePaused = false;
+    bool m_appRulePaused = false;
+    /** 规则显式要求「忽略」——用于压住全屏暂停（V4.9）。 */
+    bool m_appRuleIgnored = false;
+
+    // ---- V4.9：逐应用规则与远程会话 ----
+    QCheckBox* m_pauseOnRemote = nullptr;
+    QCheckBox* m_appRulesEnabled = nullptr;
+    QListWidget* m_ruleList = nullptr;
+    QLabel* m_pauseStateLabel = nullptr;
+    QTimer* m_ruleTimer = nullptr;
+    QList<QPair<QString, int>> m_appRules; // 可执行文件名 → 0=暂停 / 1=忽略（不暂停）
+
+    // ---- V4.9：触发规则（进程 → 预设）----
+    QListWidget* m_triggerList = nullptr;
+    QTimer* m_triggerTimer = nullptr;
+    QList<QPair<QString, QString>> m_triggers; // 可执行文件名 → 预设名
+    QString m_lastForegroundExe;               // 用于只在「切换前台程序」时判定一次
     bool m_backendReady = false;
     ThemeKind m_theme = ThemeKind::System;
 };

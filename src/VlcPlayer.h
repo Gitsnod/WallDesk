@@ -25,7 +25,8 @@ enum class VlcProfile {
     Auto = 0,     // 默认：丢帧保流畅，解码方式交给 VLC 判断
     Hardware = 1, // 强制硬件解码 + D3D11 输出，CPU 占用最低
     Software = 2, // 强制软件解码 + GDI 输出，兼容性最好
-    Quality = 3   // 不丢帧，画质优先，CPU 占用略高
+    Quality = 3,   // 不丢帧，画质优先，CPU 占用略高
+    PowerSave = 4  // 省电（V4.9）：硬解 + 限制解码线程，笔记本 / 小主机更稳
 };
 
 /**
@@ -64,6 +65,13 @@ public:
 
     /** 设置解码档位。已加载时会在下次播放生效（libvlc 实例参数不能热改）。 */
     void setProfile(VlcProfile profile);
+    /**
+     * 某档位会下发给 libVLC 的参数（V4.9）。
+     *
+     * 与真正起播时的入参是同一个函数生成的，因此可以把它写进日志 / 「关于」，
+     * 让用户确认「我选的档位到底生效成什么参数」，而不是只看到一个下拉框。
+     */
+    static QStringList profileArguments(VlcProfile profile);
     VlcProfile profile() const { return m_profile; }
 
     /**

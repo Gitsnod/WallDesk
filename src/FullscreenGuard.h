@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
+#include <QStringList>
 
 class QTimer;
 
@@ -22,6 +24,18 @@ public:
 
     void setEnabled(bool enabled);
     bool isFullscreen() const { return m_active; }
+
+    /**
+     * 前台窗口所属进程的可执行文件名（小写、不含路径）。V4.9。
+     * 取不到（无前台窗口 / 进程已退出 / 拒绝访问）时返回空字符串。
+     */
+    static QString foregroundExeName();
+
+    /**
+     * 当前会话内拥有可见顶层窗口的进程名（小写、去重、升序）。V4.9。
+     * 用于「逐应用规则」的候选列表。
+     */
+    static QStringList windowProcessNames();
 
 signals:
     void fullscreenChanged(bool active);
