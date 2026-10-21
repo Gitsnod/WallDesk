@@ -48,9 +48,30 @@ QString hashKey(const QString& path, const QSize& size)
     return QString::fromLatin1(hash.result().toHex());
 }
 
+/** 缓存用哪种格式写：WebP 体积约为 PNG 的一半，但需要 qwebp 插件（V4.12）。 */
+const char* cacheImageFormat()
+{
+    static const bool webpOk = [] {
+        return QImageWriter::supportedImageFormats().contains(QByteArrayLiteral("webp"));
+    }();
+    return webpOk ? "webp" : "png";
+}
+
+QString cacheFile(const QString& path, const QSize& size, const char* ext)
+{
+    return ThumbnailLoader::cacheDir() + QStringLiteral("/") + hashKey(path, size)
+           + QLatin1Char('.') + QString::fromLatin1(ext);
+}
+
 QString cacheFileFor(const QString& path, const QSize& size)
 {
-    return ThumbnailLoader::cacheDir() + QStringLiteral("/") + hashKey(path, size) + QStringLiteral(".png");
+    return cacheFile(path, size, cacheImageFormat());
+}
+
+/** 老版本写的是 png；命中后转成当前格式再删，避免每次启动都读旧文件。 */
+QString legacyPngFor(const QString& path, const QSize& size)
+{
+    return cacheFile(path, size, "png");
 }
 
 /** 居中裁剪：先按短边缩放到目标框，再取中间区域，得到填充式缩略图。 */
@@ -86,8 +107,8 @@ void trimCacheIfNeeded()
         return;
     }
     QDir dir(ThumbnailLoader::cacheDir());
-    const QFileInfoList files = dir.entryInfoList(QStringList{QStringLiteral("*.png")},
-                                                  QDir::Files, QDir::Time);
+    const QFileInfoList files = dir.entryInfoList(
+        QStringList{QStringLiteral("*.webp"), QStringLiteral("*.png")}, QDir::Files, QDir::Time);
     if (files.size() <= kMaxCacheFiles) {
         return;
     }
@@ -105,6 +126,18 @@ QImage loadOrGenerate(const QString& path, bool isVideo, const QSize& size,
     if (cachedImage.load(cache)) {
         return cachedImage;
     }
+    // 老缓存是 png：读出来顺手转成当前格式
+    const QString legacy = legacyPngFor(path, size);
+    if (QFile::exists(legacy) && legacy != cache) {
+        if (cachedImage.load(legacy)) {
+            QImageWriter convert(cache, QByteArray(cacheImageFormat()));
+            convert.setQuality(80);
+            if (convert.write(cachedImage)) {
+                QFile::remove(legacy);
+            }
+            return cachedImage;
+        }
+    }
     if (!QFileInfo::exists(path)) {
         return QImage();
     }
@@ -116,7 +149,7 @@ QImage loadOrGenerate(const QString& path, bool isVideo, const QSize& size,
     }
 
     QDir().mkpath(ThumbnailLoader::cacheDir());
-    QImageWriter writer(cache, "png");
+    QImageWriter writer(cache, QByteArray(cacheImageFormat()));
     writer.setQuality(80);
     if (writer.write(result)) {
         trimCacheIfNeeded();
@@ -275,6 +308,11 @@ void ThumbnailLoader::deliverPreview(const QString& path, const QList<QImage>& f
     emit previewReady(path);
 }
 
+QString ThumbnailLoader::cacheFormatName()
+{
+    return QString::fromLatin1(cacheImageFormat());
+}
+
 QString ThumbnailLoader::cacheDir()
 {
     // 路径由 AppPaths 统一管理（V4）：安装模式在 %LOCALAPPDATA%，便携模式在程序目录
@@ -284,7 +322,8 @@ QString ThumbnailLoader::cacheDir()
 int ThumbnailLoader::clearCache()
 {
     const QDir dir(cacheDir());
-    const QFileInfoList files = dir.entryInfoList(QStringList{QStringLiteral("*.png")}, QDir::Files);
+    const QFileInfoList files =
+        dir.entryInfoList(QStringList{QStringLiteral("*.webp"), QStringLiteral("*.png")}, QDir::Files);
     int removed = 0;
     for (const QFileInfo& file : files) {
         if (QFile::remove(file.absoluteFilePath())) {

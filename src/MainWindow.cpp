@@ -306,6 +306,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_thumbs = new ThumbnailLoader(this);
     connect(m_thumbs, &ThumbnailLoader::ready, this, &MainWindow::onThumbnailReady);
+    Logger::info(QStringLiteral("缩略图缓存格式：%1").arg(ThumbnailLoader::cacheFormatName()));
 
     buildUi();
     refreshMonitors(); // 需在 loadSettings 之前，配置里保存的是显示器序号

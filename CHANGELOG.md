@@ -10,6 +10,17 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.11.1] - 2026-10-21
+
+### 变更（Changed）
+
+- **缩略图缓存格式 PNG → WebP**：体积约为原来的 20–25%（实测一张视频缩略图 11,592 → 2,528 字节），
+  磁盘缓存命中更快、占用更小。已有 PNG 缓存会在首次读取时**自动转成 WebP 并删除旧文件**，
+  不需要手动清缓存；无 WebP 写插件时自动退回 PNG，功能不受影响。
+- **随包新增 Qt WebP 图像插件** `imageformats/qwebp.dll`（来自 Qt 6.11.2 官方 qtimageformats 模块，
+  已核对官方 sha1 `c482247c…`）。第三方声明已补该插件与其内置 libwebp 的许可信息。
+- 启动日志新增一行 `缩略图缓存格式：webp|png`，便于确认插件是否真的加载。
+
 ## [4.11.0] - 2026-10-21
 
 ### 新增（Added）
@@ -265,7 +276,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.11.0...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.11.1...HEAD
+[4.11.1]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.11.1
 [4.11.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.11.0
 [4.10.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.10.0
 [4.9.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.9.0

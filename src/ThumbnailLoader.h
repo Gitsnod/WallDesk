@@ -66,6 +66,8 @@ public:
     static QImage placeholder(const QSize& size, bool video);
 
     static QString cacheDir();
+    /** 当前缓存图像格式名：有 WebP 写插件时是 webp，否则 png（V4.12）。 */
+    static QString cacheFormatName();
     /** 清空磁盘缓存，返回删除的文件数。 */
     static int clearCache();
     /** 清空内存 LRU，立即释放已解码的缩略图。 */

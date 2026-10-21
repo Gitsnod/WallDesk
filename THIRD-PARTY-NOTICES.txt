@@ -19,7 +19,14 @@ WallDesk 自身代码以 MIT License 发布（见 LICENSE 文件）。
    https://www.videolan.org/vlc/download-sources.html 获取；
    本软件未修改 libVLC 源码。
 
-3. Inno Setup 简体中文语言文件（installer/Languages/ChineseSimplified.isl）
+3. Qt WebP 图像插件（imageformats/qwebp.dll，Qt 6.11.2 官方 qtimageformats 模块）
+   许可证：LGPL v3（Qt 插件本体）；其内置的 libwebp 为 BSD 3-Clause。
+   使用方式：随包以独立插件 DLL 形式部署，运行时由 Qt 动态加载，
+   用于把缩略图缓存写成 WebP（V4.11.1 起）。
+   来源：https://download.qt.io/online/qtsdkrepository/（qt.qt6.6112.addons.qtimageformats.win64_mingw）
+   本软件未修改该插件与 libwebp 源码。
+
+4. Inno Setup 简体中文语言文件（installer/Languages/ChineseSimplified.isl）
    来源：https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation
    许可证：MIT License。
    用途：为安装程序提供简体中文界面。
