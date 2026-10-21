@@ -10,6 +10,18 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.13.0] - 2026-10-21
+
+### 新增（Added）
+
+- **缩略图淡入**：真实缩略图首次绘制时用 180ms 从透明过渡到不透明，替换原来的硬切换。
+  占位图不参与淡入，避免「假图淡入一次、真图再淡入一次」的两次闪动。
+- 新增配置项 `uiFadeMs`（默认 180，0 关闭，上限 1000）；暂不提供界面入口。
+
+### 变更（Changed）
+
+- 淡入期间以 16ms 定时重绘，超过窗口时间立即停表；无图变化时不产生额外重绘。
+
 ## [4.12.0] - 2026-10-21
 
 ### 新增（Added）
@@ -289,7 +301,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.12.0...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.13.0...HEAD
+[4.13.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.13.0
 [4.12.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.12.0
 [4.11.1]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.11.1
 [4.11.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.11.0

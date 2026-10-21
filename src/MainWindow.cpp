@@ -149,11 +149,15 @@ QPixmap placeholderPixmap(const QSize& size, bool video)
 class GalleryDelegate : public QStyledItemDelegate {
 public:
     GalleryDelegate(QListWidget* view, ThumbnailLoader* thumbs, const HoverPreviewState* preview,
-                    QObject* parent = nullptr)
+                    QHash<QString, qint64>* seen, const QElapsedTimer* clock,
+                    const int* fadeMs, QObject* parent = nullptr)
         : QStyledItemDelegate(parent)
         , m_view(view)
         , m_thumbs(thumbs)
         , m_preview(preview)
+        , m_seen(seen)
+        , m_clock(clock)
+        , m_fadeMs(fadeMs)
     {
     }
 
@@ -192,7 +196,9 @@ public:
         const QRect thumb(QPoint(card.center().x() - icon.width() / 2, card.top() + 4), icon);
 
         QPixmap pm;
+        bool realThumb = false;
         if (m_thumbs && m_thumbs->memoryPixmap(path, &pm)) {
+            realThumb = true;
             if (pm.size() != thumb.size()) {
                 const QPixmap scaled = pm.scaled(thumb.size(), Qt::KeepAspectRatioByExpanding,
                                                  Qt::SmoothTransformation);
@@ -204,6 +210,21 @@ public:
             pm = placeholderPixmap(icon, video);
             if (m_thumbs && !path.isEmpty() && m_view) {
                 m_thumbs->request(path, video, icon);
+            }
+        }
+
+        // 淡入（V4.13）：真实缩略图首次绘制时从 0 过渡到 1，避免硬跳变；
+        // 占位图不参与，否则会先淡入一个"假图"再淡入真图，两次闪动更难看。
+        qreal alpha = 1.0;
+        const int fadeMs = m_fadeMs ? *m_fadeMs : 0;
+        if (realThumb && fadeMs > 0 && m_seen && m_clock) {
+            auto it = m_seen->constFind(path);
+            if (it == m_seen->constEnd()) {
+                m_seen->insert(path, m_clock->elapsed());
+                alpha = 0.0;
+            } else {
+                const qint64 age = m_clock->elapsed() - it.value();
+                alpha = qBound(0.0, static_cast<qreal>(age) / fadeMs, 1.0);
             }
         }
 
@@ -221,7 +242,9 @@ public:
         QPainterPath clip;
         clip.addRoundedRect(thumb, 8, 8);        painter->save();
         painter->setClipPath(clip);
+        painter->setOpacity(alpha);
         painter->drawPixmap(thumb, pm);
+        painter->setOpacity(1.0);
         painter->restore();
 
         // 内描边：浅色主题下防止浅色图与卡片糊在一起
@@ -275,6 +298,9 @@ private:
     QListWidget* m_view = nullptr;
     ThumbnailLoader* m_thumbs = nullptr;
     const HoverPreviewState* m_preview = nullptr;
+    QHash<QString, qint64>* m_seen = nullptr; // 首次绘制时刻表（主窗口持有）
+    const QElapsedTimer* m_clock = nullptr;   // 单调时钟，避免系统时间跳变
+    const int* m_fadeMs = nullptr;            // 指向主窗口的时长（配置加载后可变）
 };
 
 } // namespace
@@ -870,7 +896,8 @@ QWidget* MainWindow::buildLibraryPage()
     m_list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_list->setIconSize(thumbSizeForIndex(kThumbDefaultIndex));
     m_list->setGridSize(gridSizeForThumb(thumbSizeForIndex(kThumbDefaultIndex)));
-    m_list->setItemDelegate(new GalleryDelegate(m_list, m_thumbs, &m_hoverPreview, m_list));
+    m_list->setItemDelegate(new GalleryDelegate(m_list, m_thumbs, &m_hoverPreview,
+                                                &m_thumbSeen, &m_fadeClock, &m_fadeMs, m_list));
     // 悬停动态预览（V4.10）：itemEntered 需要鼠标跟踪；离开卡片或视口时停掉
     m_list->setMouseTracking(true);
     m_list->viewport()->setMouseTracking(true);
@@ -907,6 +934,12 @@ QWidget* MainWindow::buildLibraryPage()
 
     // 只加载看得见的那几张：滚动 / 缩放后延迟 120 ms 补请求，
     // 一次性给整个库排队会同时唤醒一堆解码线程，内存和 CPU 都白烧。
+    // 淡入刷新：只在有图刚出现的一小段时间里以 16ms 重绘，安静时不跑
+    m_fadeClock.start();
+    m_fadeTimer = new QTimer(this);
+    m_fadeTimer->setInterval(16);
+    connect(m_fadeTimer, &QTimer::timeout, this, &MainWindow::onFadeTick);
+
     m_thumbTimer = new QTimer(this);
     m_thumbTimer->setSingleShot(true);
     m_thumbTimer->setInterval(120);
@@ -1715,6 +1748,8 @@ void MainWindow::loadSettings()
     if (m_hoverPreviewEnabled) {
         m_hoverPreviewEnabled->setChecked(s.value(QStringLiteral("hoverPreview"), true).toBool());
     }
+    // 缩略图淡入时长：0 关闭；默认 180ms（V4.13，暂时只走配置，不做界面）
+    m_fadeMs = qBound(0, s.value(QStringLiteral("uiFadeMs"), 180).toInt(), 1000);
     m_appRules.clear();
     // 用换行分隔的普通字符串存，而不是 QStringList：
     // QSettings 在注册表里对 QStringList 用的是 Qt 私有编码，手改/工具注入读不回来，
@@ -2593,6 +2628,8 @@ void MainWindow::refreshList()
 {
     // 列表重建后行号失效，先停掉悬停预览，避免重绘到错位的行
     stopHoverPreview();
+    m_thumbSeen.clear(); // 新库/新排序后重新淡入
+    beginFadeWindow();
     // 旧任务先作废：库整体重建后，为已移除项排队解码纯属浪费
     if (m_thumbs) {
         m_thumbs->clearPending();
@@ -2676,6 +2713,7 @@ void MainWindow::requestVisibleThumbnails()
         }
         m_thumbs->request(row->data(kRolePath).toString(), video, m_list->iconSize());
     }
+    beginFadeWindow();
 }
 
 void MainWindow::onThumbSizeChanged(int)
@@ -2694,6 +2732,28 @@ void MainWindow::onThumbSizeChanged(int)
 void MainWindow::onThumbnailReady(const QString&, const QImage&)
 {
     // 缩略图已进入内存 LRU，委托下次绘制时自取；这里只要求重绘可见区域
+    beginFadeWindow();
+    if (m_list) {
+        m_list->viewport()->update();
+    }
+}
+
+void MainWindow::beginFadeWindow()
+{
+    if (m_fadeMs <= 0 || !m_fadeTimer) {
+        return;
+    }
+    m_fadeUntil = m_fadeClock.elapsed() + m_fadeMs + 80;
+    if (!m_fadeTimer->isActive()) {
+        m_fadeTimer->start();
+    }
+}
+
+void MainWindow::onFadeTick()
+{
+    if (m_fadeClock.elapsed() > m_fadeUntil) {
+        m_fadeTimer->stop();
+    }
     if (m_list) {
         m_list->viewport()->update();
     }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QDateTime>
+#include <QElapsedTimer>
+#include <QHash>
 #include <QImage>
 #include <QList>
 #include <QMainWindow>
@@ -407,6 +409,15 @@ private:
     int m_hoverRow = -1;            // 正在预览的行号
     /** 只重绘悬停卡片所在矩形，避免整表刷新。 */
     void repaintHoverRow();
+
+    // ---- V4.13：缩略图淡入 ----
+    void onFadeTick();
+    void beginFadeWindow();
+    QTimer* m_fadeTimer = nullptr;
+    QElapsedTimer m_fadeClock;
+    qint64 m_fadeUntil = 0;
+    int m_fadeMs = 180;              // 0 = 关闭；配置键 uiFadeMs
+    QHash<QString, qint64> m_thumbSeen; // 路径 → 首次绘制时刻（毫秒）
 
     // ---- V4.11：右下角状态胶囊 ----
     void buildStatusCapsule(QWidget* parent);
