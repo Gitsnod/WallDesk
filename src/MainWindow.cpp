@@ -66,6 +66,9 @@
 #include <QStatusBar>
 #include <QDateTime>
 #include <QDirIterator>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QStyle>
 #include <QStyledItemDelegate>
 #include <QTableWidget>
@@ -544,6 +547,7 @@ void MainWindow::buildUi()
 
     setCentralWidget(central);
     buildStatusCapsule(central);
+    setAcceptDrops(true);
     compactGroupBoxes(central); // 页面建完统一压紧，留白收掉
 
     buildActions();
@@ -2282,6 +2286,170 @@ QString humanDuration(qint64 seconds)
 }
 } // namespace
 
+
+// ---------------------------------------------------------------- 拖拽导入（V4.12）
+
+namespace {
+const QStringList& imageSuffixes()
+{
+    static const QStringList list{QStringLiteral("jpg"), QStringLiteral("jpeg"),
+                                  QStringLiteral("png"), QStringLiteral("bmp"),
+                                  QStringLiteral("webp"), QStringLiteral("gif")};
+    return list;
+}
+
+const QStringList& videoSuffixes()
+{
+    static const QStringList list{QStringLiteral("mp4"), QStringLiteral("mkv"),
+                                  QStringLiteral("webm"), QStringLiteral("avi"),
+                                  QStringLiteral("mov"), QStringLiteral("wmv"),
+                                  QStringLiteral("flv")};
+    return list;
+}
+} // namespace
+
+bool MainWindow::acceptDropUrls(const QMimeData* mime) const
+{
+    if (!mime || !mime->hasUrls()) {
+        return false;
+    }
+    for (const QUrl& url : mime->urls()) {
+        if (url.isLocalFile()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void MainWindow::updateDropHint(bool visible)
+{
+    if (!m_dropHint) {
+        return;
+    }
+    if (visible && !m_dropHint->isVisible()) {
+        m_dropHint->show();
+    } else if (!visible) {
+        m_dropHint->hide();
+        return;
+    }
+    if (QWidget* central = centralWidget()) {
+        m_dropHint->setGeometry(central->rect().adjusted(14, 14, -14, -14));
+    }
+    m_dropHint->raise();
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (!acceptDropUrls(event->mimeData())) {
+        event->ignore();
+        return;
+    }
+    event->acceptProposedAction();
+    updateDropHint(true);
+}
+
+void MainWindow::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (!acceptDropUrls(event->mimeData())) {
+        event->ignore();
+        updateDropHint(false);
+        return;
+    }
+    event->acceptProposedAction();
+    updateDropHint(true);
+}
+
+void MainWindow::dragLeaveEvent(QDragLeaveEvent* event)
+{
+    Q_UNUSED(event);
+    updateDropHint(false);
+}
+
+void MainWindow::dropEvent(QDropEvent* event)
+{
+    updateDropHint(false);
+    if (!acceptDropUrls(event->mimeData())) {
+        event->ignore();
+        return;
+    }
+    QStringList paths;
+    for (const QUrl& url : event->mimeData()->urls()) {
+        if (url.isLocalFile()) {
+            paths << url.toLocalFile();
+        }
+    }
+    event->acceptProposedAction();
+    importPaths(paths);
+}
+
+void MainWindow::importPaths(const QStringList& paths)
+{
+    if (paths.isEmpty()) {
+        return;
+    }
+
+    QSet<QString> known;
+    for (const MediaItem& item : m_items) {
+        known.insert(QDir::cleanPath(item.path).toLower());
+    }
+
+    QStringList candidates;
+    for (const QString& raw : paths) {
+        const QFileInfo info(raw);
+        if (info.isDir()) {
+            QDirIterator it(info.absoluteFilePath(), QDir::Files, QDirIterator::Subdirectories);
+            int guard = 0;
+            while (it.hasNext() && guard++ < 4000) {
+                candidates << it.next();
+            }
+        } else if (info.isFile()) {
+            candidates << info.absoluteFilePath();
+        }
+    }
+
+    int added = 0;
+    int skipped = 0;
+    for (const QString& file : candidates) {
+        const QString suffix = QFileInfo(file).suffix().toLower();
+        MediaItem::Type type = MediaItem::Type::Image;
+        if (imageSuffixes().contains(suffix)) {
+            type = MediaItem::Type::Image;
+        } else if (videoSuffixes().contains(suffix)) {
+            type = MediaItem::Type::Video;
+        } else {
+            ++skipped;
+            continue;
+        }
+        const QString key = QDir::cleanPath(file).toLower();
+        if (known.contains(key)) {
+            ++skipped;
+            continue;
+        }
+        known.insert(key);
+        MediaItem item;
+        item.type = type;
+        item.path = QDir::toNativeSeparators(file);
+        item.added = QDateTime::currentMSecsSinceEpoch();
+        m_items.append(item);
+        ++added;
+    }
+
+    if (added == 0) {
+        updateStatus(skipped > 0
+                         ? QStringLiteral("没有新文件可加入（已有或不支持：%1 个）").arg(skipped)
+                         : QStringLiteral("没有新文件可加入"));
+        Logger::info(QStringLiteral("导入结束：新增 0 个，跳过 %1 个").arg(skipped));
+        return;
+    }
+
+    saveSettings();
+    refreshList();
+    updateStatus(QStringLiteral("已加入 %1 个文件%2")
+                     .arg(added)
+                     .arg(skipped > 0 ? QStringLiteral("，跳过 %1 个").arg(skipped) : QString()));
+    Logger::info(QStringLiteral("导入完成：新增 %1 个，跳过 %2 个").arg(added).arg(skipped));
+}
+
 void MainWindow::buildStatusCapsule(QWidget* parent)
 {
     m_capsule = new QFrame(parent);
@@ -2299,6 +2467,21 @@ void MainWindow::buildStatusCapsule(QWidget* parent)
     lay->addWidget(m_capsuleLabel);
 
     m_capsule->installEventFilter(this);
+
+    // 拖拽投放高亮：整块半透明蓝框 + 提示文字，拖拽期间才显示
+    m_dropHint = new QFrame(parent);
+    m_dropHint->setObjectName(QStringLiteral("dropHint"));
+    m_dropHint->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_dropHint->setStyleSheet(QStringLiteral(
+        "#dropHint{background:rgba(37,99,235,0.10);border:2px dashed rgba(37,99,235,0.75);"
+        "border-radius:14px;}"));
+    auto* dropLayout = new QVBoxLayout(m_dropHint);
+    auto* dropLabel = new QLabel(QStringLiteral("松开鼠标，添加到壁纸库"), m_dropHint);
+    dropLabel->setAlignment(Qt::AlignCenter);
+    dropLabel->setStyleSheet(QStringLiteral(
+        "color:rgba(37,99,235,0.95);font-size:15px;font-weight:600;"));
+    dropLayout->addWidget(dropLabel);
+    m_dropHint->hide();
 
     m_capsuleTimer = new QTimer(this);
     m_capsuleTimer->setInterval(2000);
@@ -3578,7 +3761,8 @@ void MainWindow::onAddImages()
 {
     const QStringList files = QFileDialog::getOpenFileNames(
         this, QStringLiteral("选择图片"), QString(),
-        QStringLiteral("图片文件 (*.jpg *.jpeg *.png *.bmp *.webp *.gif);;所有文件 (*.*)"));
+        QStringLiteral("图片文件 (*.%1);;所有文件 (*.*)")
+            .arg(imageSuffixes().join(QStringLiteral(" *."))));
     if (files.isEmpty()) {
         return;
     }
@@ -3593,7 +3777,8 @@ void MainWindow::onAddVideos()
 {
     const QStringList files = QFileDialog::getOpenFileNames(
         this, QStringLiteral("选择视频"), QString(),
-        QStringLiteral("视频文件 (*.mp4 *.mkv *.webm *.avi *.mov *.wmv *.flv);;所有文件 (*.*)"));
+        QStringLiteral("视频文件 (*.%1);;所有文件 (*.*)")
+            .arg(videoSuffixes().join(QStringLiteral(" *."))));
     if (files.isEmpty()) {
         return;
     }

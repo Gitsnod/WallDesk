@@ -20,8 +20,11 @@ class FullscreenGuard;
 class OnlineSources;
 class ThumbnailLoader;
 class QAction;
+class QMimeData;
 class QCheckBox;
 class QComboBox;
+class QDragEnterEvent;
+class QDropEvent;
 class QFormLayout;
 class QFrame;
 class QLabel;
@@ -75,10 +78,20 @@ public:
     void requestShow();
     /** 处理其它实例转交的指令：next / quit，其它一律视为显示主界面。 */
     void handleCommand(const QString& command);
+    /**
+     * 把文件或目录加入壁纸库（V4.12）。拖拽投放与命令行 `--import` 共用同一条路径：
+     * 目录会递归扫描（最多 4000 个），按扩展名分类，重复路径跳过。
+     */
+    void importPaths(const QStringList& paths);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    // 拖拽导入（V4.12）
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
     /** 图库视口的鼠标移动/离开：驱动悬停预览（不依赖 itemEntered 的时序）。 */
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -401,6 +414,9 @@ private:
     void refreshStatusCapsule();
     void toggleStatusCapsule();
     QFrame* m_capsule = nullptr;
+    QFrame* m_dropHint = nullptr;   // 拖拽投放高亮层
+    bool acceptDropUrls(const QMimeData* mime) const;
+    void updateDropHint(bool visible);
     QLabel* m_capsuleLabel = nullptr;
     QTimer* m_capsuleTimer = nullptr;
     bool m_capsuleExpanded = false;

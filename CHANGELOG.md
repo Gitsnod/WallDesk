@@ -10,6 +10,19 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.12.0] - 2026-10-21
+
+### 新增（Added）
+
+- **拖拽导入**：文件或文件夹拖到窗口即可入库，拖拽期间显示蓝色虚线投放框与提示文字。
+  目录递归扫描（上限 4000 个文件），按扩展名分类，重复路径跳过，结果在状态栏与日志同时回显。
+- **命令行导入**：`--import <文件或目录>`，与拖拽共用 `importPaths()`，导入后不进入事件循环。
+
+### 变更（Changed）
+
+- 支持扩展名集中到 `imageSuffixes()` / `videoSuffixes()` 两个函数，避免与「添加文件」对话框里的
+  过滤器各自维护一份而漂移。
+
 ## [4.11.1] - 2026-10-21
 
 ### 变更（Changed）
@@ -276,7 +289,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.11.1...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.12.0...HEAD
+[4.12.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.12.0
 [4.11.1]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.11.1
 [4.11.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.11.0
 [4.10.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.10.0

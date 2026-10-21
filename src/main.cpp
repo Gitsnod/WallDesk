@@ -42,11 +42,15 @@ int main(int argc, char* argv[])
                                          QStringLiteral("本次启动强制使用便携模式"));
     const QCommandLineOption verboseOpt(QStringLiteral("verbose"),
                                         QStringLiteral("在日志中额外记录调试信息"));
+    const QCommandLineOption importOpt(QStringLiteral("import"),
+                                       QStringLiteral("把指定文件或目录加入壁纸库后退出"),
+                                       QStringLiteral("path"));
     parser.addOption(minimizedOpt);
     parser.addOption(nextOpt);
     parser.addOption(quitOpt);
     parser.addOption(portableOpt);
     parser.addOption(verboseOpt);
+    parser.addOption(importOpt);
     parser.process(app);
 
     // 路径与日志必须先于一切可写操作初始化（便携模式探测决定配置/数据落点）
@@ -69,6 +73,12 @@ int main(int argc, char* argv[])
 
     MainWindow w;
     Logger::info(QStringLiteral("主窗口构造完成"));
+    // 命令行导入：与拖拽投放走同一条 importPaths，导入后不进入事件循环
+    if (parser.isSet(importOpt)) {
+        w.importPaths(QStringList{parser.value(importOpt)});
+        Logger::info(QStringLiteral("命令行导入结束，退出"));
+        return 0;
+    }
     QObject::connect(&guard, &SingleInstance::activateRequested, &w, &MainWindow::requestShow);
     QObject::connect(&guard, &SingleInstance::commandReceived, &w, &MainWindow::handleCommand);
     if (!parser.isSet(minimizedOpt)) {
