@@ -24,6 +24,7 @@ class ThumbnailLoader;
 class QAction;
 class QMimeData;
 class QCheckBox;
+class AnimatedComboBox;
 class QComboBox;
 class QDragEnterEvent;
 class QDropEvent;
@@ -37,6 +38,7 @@ class QListWidget;
 class QListWidgetItem;
 class QMenu;
 class QProgressBar;
+class AnimatedPushButton;
 class QPushButton;
 class QRadioButton;
 class QSlider;
@@ -292,11 +294,11 @@ private:
     QParallelAnimationGroup* m_pageFadeAnim = nullptr;
     QList<QWidget*> m_pageFxTargets;              // 当前挂了不透明度效果的组
     QList<QList<QWidget*>> m_settingsPages;
-    QComboBox* m_fitCombo = nullptr;
-    QComboBox* m_screenCombo = nullptr;
-    QComboBox* m_monitorCombo = nullptr;
-    QComboBox* m_profileCombo = nullptr;
-    QComboBox* m_thumbSizeCombo = nullptr;
+    AnimatedComboBox* m_fitCombo = nullptr;
+    AnimatedComboBox* m_screenCombo = nullptr;
+    AnimatedComboBox* m_monitorCombo = nullptr;
+    AnimatedComboBox* m_profileCombo = nullptr;
+    AnimatedComboBox* m_thumbSizeCombo = nullptr;
     QList<QAction*> m_themeActions;
     QList<QRadioButton*> m_themeRadios;
     QAction* m_actPause = nullptr;
@@ -313,8 +315,8 @@ private:
 
     // ---- V4.6 新增：检索 / 收藏 ----
     QLineEdit* m_searchEdit = nullptr;
-    QComboBox* m_filterCombo = nullptr;
-    QComboBox* m_sortCombo = nullptr;
+    AnimatedComboBox* m_filterCombo = nullptr;
+    AnimatedComboBox* m_sortCombo = nullptr;
     QList<int> m_visible;       // 行号 → m_items 下标（过滤 / 排序后的映射）
     QList<int> m_shuffleQueue;  // 不重复随机的播放队列
     int m_shufflePos = 0;
@@ -322,8 +324,8 @@ private:
     // ---- V4.7 新增：场景预设 ----
     // 壁纸库页操作行一个、设置页「场景」子页一个，两者互为镜像且双向同步。
     // V4.8 起「保存为预设 / 删除预设」收进壁纸库页的「更多」菜单，不再单占按钮。
-    QComboBox* m_presetCombo = nullptr;
-    QComboBox* m_monitorPresetCombo = nullptr;
+    AnimatedComboBox* m_presetCombo = nullptr;
+    AnimatedComboBox* m_monitorPresetCombo = nullptr;
     // 名字 → 预设。用列表而非哈希，保住用户在文件里定义的顺序。
     QList<WallpaperPreset> m_presets;
 
@@ -332,7 +334,7 @@ private:
     OnlineSources* m_online = nullptr;
 
     // ---- V4.7 新增：按分辨率 / 朝向分组 ----
-    QComboBox* m_resolutionCombo = nullptr;
+    AnimatedComboBox* m_resolutionCombo = nullptr;
     QList<QString> m_visibleOrientation; // 与 m_visible 平行的朝向缓存，避免每帧重探测
     QList<int> m_visibleResolution;      // 同上，存 ResolutionTier 的整型值
 
@@ -340,8 +342,8 @@ private:
     QList<QString> m_history; // 最近播放过的文件路径，最新的排在首位
 
     // ---- V4.6 新增：切换策略 ----
-    QComboBox* m_switchModeCombo = nullptr;
-    QComboBox* m_switchScopeCombo = nullptr;
+    AnimatedComboBox* m_switchModeCombo = nullptr;
+    AnimatedComboBox* m_switchScopeCombo = nullptr;
 
     // ---- V4.6 新增：定时场景 ----
     QCheckBox* m_sceneEnabled = nullptr;
@@ -365,8 +367,8 @@ private:
     QCheckBox* m_overlayCalendar = nullptr;
     QCheckBox* m_overlayText = nullptr;
     QLineEdit* m_overlayTextEdit = nullptr;
-    QComboBox* m_overlayPosCombo = nullptr;
-    QComboBox* m_overlayScreenCombo = nullptr;
+    AnimatedComboBox* m_overlayPosCombo = nullptr;
+    AnimatedComboBox* m_overlayScreenCombo = nullptr;
     QSpinBox* m_overlaySize = nullptr;
     AudioSpectrum* m_spectrum = nullptr;
     QCheckBox* m_spectrumEnabled = nullptr;
@@ -381,9 +383,9 @@ private:
     QLabel* m_libraryTitle = nullptr;
     QStackedWidget* m_galleryStack = nullptr;
     QProgressBar* m_busy = nullptr;
-    QPushButton* m_pauseButton = nullptr;
-    QPushButton* m_applyButton = nullptr; // 壁纸库页操作行
-    QPushButton* m_nextButton = nullptr;  // 壁纸库页操作行
+    AnimatedPushButton* m_pauseButton = nullptr;
+    AnimatedPushButton* m_applyButton = nullptr; // 壁纸库页操作行
+    AnimatedPushButton* m_nextButton = nullptr;  // 壁纸库页操作行
 
     QTimer* m_timer = nullptr;        // 自动切换
     QTimer* m_thumbTimer = nullptr;   // 可见区域缩略图补加载（防抖）
@@ -447,19 +449,25 @@ private:
     int m_fadeMs = 180;              // 0 = 关闭；配置键 uiFadeMs
     QHash<QString, qint64> m_thumbSeen; // 路径 → 首次绘制时刻（毫秒）
 
-    // ---- V4.11：右下角状态胶囊 ----
+    /** 场景级淡入（V4.17 P2）：整页/整块从 0 到 1，结束即摘掉 effect。
+     *  用 effect 而不是改 geometry，避免牵动布局把邻居挤动。 */
+    void fadeInWidget(QWidget* w, int ms);
+
+    // ---- V4.11：底部状态胶囊（V4.17 起嵌入状态栏，悬浮出详情浮层） ----
     void buildStatusCapsule(QWidget* parent);
-    void layoutStatusCapsule();
     void refreshStatusCapsule();
-    void toggleStatusCapsule();
-    QFrame* m_capsule = nullptr;
+    void showCapsuleDetail();   // 鼠标悬浮：在胶囊上方弹出详情浮层
+    void hideCapsuleDetail();   // 移走：收起
+    QFrame* m_capsule = nullptr;          // 状态栏里的单行胶囊
+    QFrame* m_capsuleDetail = nullptr;    // 详情浮层（独立 ToolTip 窗口，不挤布局）
     QFrame* m_dropHint = nullptr;   // 拖拽投放高亮层
     bool acceptDropUrls(const QMimeData* mime) const;
     void updateDropHint(bool visible);
     QLabel* m_capsuleLabel = nullptr;
+    QLabel* m_capsuleDetailLabel = nullptr;
     QTimer* m_capsuleTimer = nullptr;
-    bool m_capsuleExpanded = false;
-    QString m_capsuleCacheText;   // 展开时算一次的缓存统计
+    QTimer* m_capsuleHoverTimer = nullptr; // 悬浮稳定 200ms 才弹，避免扫过就闪
+    QString m_capsuleCacheText;   // 悬浮时算一次的缓存统计
     QDateTime m_startedAt = QDateTime::currentDateTime();
 
     bool m_backendReady = false;

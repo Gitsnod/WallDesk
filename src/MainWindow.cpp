@@ -13,6 +13,12 @@
 #include "PresetManager.h"
 #include "ThumbnailLoader.h"
 #include "VlcBundle.h"
+#include "ui/AnimatedCheckBox.h"
+#include "ui/AnimatedComboBox.h"
+#include "ui/AnimatedPushButton.h"
+#include "ui/AnimatedSlider.h"
+#include "ui/FadeOverlay.h"
+#include "ui/MotionTokens.h"
 
 #include <QAction>
 #include <QApplication>
@@ -71,6 +77,8 @@
 #include <QDirIterator>
 #include <QEasingCurve>
 #include <QGraphicsOpacityEffect>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QParallelAnimationGroup>
 #include <QPropertyAnimation>
 #include <QDragEnterEvent>
@@ -568,8 +576,14 @@ void MainWindow::buildUi()
     new QListWidgetItem(drawNavIcon(accent, 3),
                         QStringLiteral("多屏"), m_nav);
     connect(m_nav, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (m_pages) {
-            m_pages->setCurrentIndex(row);
+        if (!m_pages) {
+            return;
+        }
+        // 构造期 setCurrentRow 时窗口还没 show，不该演；只有用户真的切页才淡入
+        const bool userSwitching = m_pages->isVisible();
+        m_pages->setCurrentIndex(row);
+        if (userSwitching) {
+            fadeInWidget(m_pages, 200); // M3 Standard 200ms
         }
     });
     m_nav->setFixedWidth(148);
@@ -584,13 +598,15 @@ void MainWindow::buildUi()
     outer->addLayout(root, 1);
 
     setCentralWidget(central);
-    buildStatusCapsule(central);
+    buildStatusCapsule(statusBar());
     setAcceptDrops(true);
     compactGroupBoxes(central); // 页面建完统一压紧，留白收掉
 
     buildActions();
 
     // ---- 状态栏：状态文字 + 后台任务指示 ----
+    // 关掉右下角的斜纹缩放把手：胶囊就在那个位置，两者叠在一起会互相压边
+    statusBar()->setSizeGripEnabled(false);
     m_busy = new QProgressBar(this);
     m_busy->setRange(0, 0); // 不确定进度：只在解包内置运行时出现
     m_busy->setFixedSize(120, 6);
@@ -743,7 +759,7 @@ QWidget* MainWindow::buildEmptyHint()
     sub->setAlignment(Qt::AlignHCenter);
     sub->setWordWrap(true);
 
-    auto* sample = new QPushButton(QStringLiteral("没有素材？生成一张示例壁纸"), hint);
+    auto* sample = new AnimatedPushButton(QStringLiteral("没有素材？生成一张示例壁纸"), hint);
     sample->setCursor(Qt::PointingHandCursor);
     connect(sample, &QPushButton::clicked, this, &MainWindow::onAddSampleWallpaper);
 
@@ -778,13 +794,13 @@ QWidget* MainWindow::buildLibraryPage()
     m_searchEdit = new QLineEdit(filterRow);
     m_searchEdit->setPlaceholderText(QStringLiteral("搜索文件名…"));
     m_searchEdit->setClearButtonEnabled(true);
-    m_filterCombo = new QComboBox(filterRow);
+    m_filterCombo = new AnimatedComboBox(filterRow);
     m_filterCombo->addItem(QStringLiteral("全部"), 0);
     m_filterCombo->addItem(QStringLiteral("图片"), 1);
     m_filterCombo->addItem(QStringLiteral("视频"), 2);
     m_filterCombo->addItem(QStringLiteral("收藏"), 3);
     m_filterCombo->addItem(QStringLiteral("在线下载"), 4); // V4.7
-    m_resolutionCombo = new QComboBox(filterRow);          // V4.7：按分辨率 / 朝向分组
+    m_resolutionCombo = new AnimatedComboBox(filterRow);          // V4.7：按分辨率 / 朝向分组
     m_resolutionCombo->addItem(QStringLiteral("任意尺寸"), 0);
     m_resolutionCombo->addItem(QStringLiteral("横向"), 1);
     m_resolutionCombo->addItem(QStringLiteral("纵向"), 2);
@@ -796,7 +812,7 @@ QWidget* MainWindow::buildLibraryPage()
     m_resolutionCombo->addItem(QStringLiteral("低于 720p"), 14);
     m_resolutionCombo->setToolTip(QStringLiteral(
         "按画面朝向或分辨率档筛选。只读文件头取尺寸，不解码整张图，几百项的库也是秒出。"));
-    m_sortCombo = new QComboBox(filterRow);
+    m_sortCombo = new AnimatedComboBox(filterRow);
     m_sortCombo->addItem(QStringLiteral("按添加时间"), 0);
     m_sortCombo->addItem(QStringLiteral("按名称"), 1);
     m_sortCombo->addItem(QStringLiteral("按类型"), 2);
@@ -822,23 +838,23 @@ QWidget* MainWindow::buildLibraryPage()
     actionLayout->setSpacing(8);
 
     auto* presetLabel = new QLabel(QStringLiteral("场景预设"), actionRow);
-    m_presetCombo = new QComboBox(actionRow);
+    m_presetCombo = new AnimatedComboBox(actionRow);
     m_presetCombo->setToolTip(QStringLiteral(
         "把壁纸、画面效果、挂件、切换策略打包成一个命名场景。存在数据目录的 presets.json 里，"
         "可手动编辑或随配置一起拷走。"));
     m_presetCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_presetCombo->setMinimumWidth(170);
-    auto* applyPresetBtn = new QPushButton(QStringLiteral("应用"), actionRow);
+    auto* applyPresetBtn = new AnimatedPushButton(QStringLiteral("应用"), actionRow);
     applyPresetBtn->setObjectName(QStringLiteral("primary"));
     applyPresetBtn->setToolTip(QStringLiteral("立即把选中预设套用到桌面"));
     connect(applyPresetBtn, &QPushButton::clicked, this, &MainWindow::onPresetApply);
 
-    m_applyButton = new QPushButton(QStringLiteral("应用选中"), actionRow);
+    m_applyButton = new AnimatedPushButton(QStringLiteral("应用选中"), actionRow);
     m_applyButton->setObjectName(QStringLiteral("primary"));
     m_applyButton->setToolTip(QStringLiteral("把画廊中选中的项应用到桌面（回车）"));
-    m_nextButton = new QPushButton(QStringLiteral("下一张"), actionRow);
+    m_nextButton = new AnimatedPushButton(QStringLiteral("下一张"), actionRow);
     m_nextButton->setToolTip(QStringLiteral("切换到清单中的下一项（Ctrl+N）"));
-    m_pauseButton = new QPushButton(QStringLiteral("暂停视频"), actionRow);
+    m_pauseButton = new AnimatedPushButton(QStringLiteral("暂停视频"), actionRow);
     m_pauseButton->setToolTip(QStringLiteral("暂停 / 继续视频壁纸（Ctrl+P）"));
     connect(m_applyButton, &QPushButton::clicked, this, &MainWindow::onApplySelected);
     connect(m_nextButton, &QPushButton::clicked, this, &MainWindow::onNext);
@@ -846,7 +862,7 @@ QWidget* MainWindow::buildLibraryPage()
 
     // 「更多」：除上面三个高频操作外的全部动作。收成菜单而非平铺，是为了把
     // 工具栏高度还给画廊——原来 9 个按钮横排一行的宽度也快到窗口极限了。
-    auto* moreBtn = new QPushButton(QStringLiteral("更多"), actionRow);
+    auto* moreBtn = new AnimatedPushButton(QStringLiteral("更多"), actionRow);
     moreBtn->setToolTip(QStringLiteral("添加 / 移除 / 清空、在线下载、停止与重新挂载、预设存取"));
     auto* moreMenu = new QMenu(moreBtn);
     moreMenu->setToolTipsVisible(true);
@@ -976,7 +992,7 @@ QWidget* MainWindow::buildSettingsPage()
     outer->setSpacing(0);
 
     m_settingsNav = new QListWidget(container);
-    m_settingsNav->setObjectName(QStringLiteral("navRail"));
+    m_settingsNav->setObjectName(QStringLiteral("settingsNav")); // 与主导航 navRail 区分层级
     m_settingsNav->setSelectionMode(QAbstractItemView::SingleSelection);
     m_settingsNav->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_settingsNav->setTextElideMode(Qt::ElideRight);
@@ -1001,7 +1017,7 @@ QWidget* MainWindow::buildSettingsPage()
     // ---- 图片 ----
     auto* imageBox = new QGroupBox(QStringLiteral("图片"), pane);
     auto* imageForm = new QFormLayout(imageBox);
-    m_fitCombo = new QComboBox(imageBox);
+    m_fitCombo = new AnimatedComboBox(imageBox);
     m_fitCombo->addItem(QStringLiteral("填充"), static_cast<int>(ImageFit::Fill));
     m_fitCombo->addItem(QStringLiteral("适应"), static_cast<int>(ImageFit::Fit));
     m_fitCombo->addItem(QStringLiteral("拉伸"), static_cast<int>(ImageFit::Stretch));
@@ -1015,17 +1031,17 @@ QWidget* MainWindow::buildSettingsPage()
     auto* videoBox = new QGroupBox(QStringLiteral("视频"), pane);
     auto* videoForm = new QFormLayout(videoBox);
 
-    m_screenCombo = new QComboBox(videoBox);
+    m_screenCombo = new AnimatedComboBox(videoBox);
     m_screenCombo->addItem(QStringLiteral("仅主显示器"), static_cast<int>(ScreenTarget::Primary));
     m_screenCombo->addItem(QStringLiteral("全部显示器"), static_cast<int>(ScreenTarget::Virtual));
     m_screenCombo->addItem(QStringLiteral("指定显示器"), static_cast<int>(ScreenTarget::Monitor));
     videoForm->addRow(QStringLiteral("覆盖范围"), m_screenCombo);
 
-    m_monitorCombo = new QComboBox(videoBox);
+    m_monitorCombo = new AnimatedComboBox(videoBox);
     m_monitorCombo->setEnabled(false);
     videoForm->addRow(QStringLiteral("目标显示器"), m_monitorCombo);
 
-    m_volumeSlider = new QSlider(Qt::Horizontal, videoBox);
+    m_volumeSlider = new AnimatedSlider(Qt::Horizontal, videoBox);
     m_volumeSlider->setRange(0, 100);
     m_volumeSlider->setValue(0);
     m_volumeSlider->setToolTip(QStringLiteral(
@@ -1036,7 +1052,7 @@ QWidget* MainWindow::buildSettingsPage()
             [this](int v) { m_engine.setVideoVolume(v); });
     videoForm->addRow(QStringLiteral("音量"), m_volumeSlider);
 
-    m_profileCombo = new QComboBox(videoBox);
+    m_profileCombo = new AnimatedComboBox(videoBox);
     m_profileCombo->addItem(QStringLiteral("自动（推荐）"), static_cast<int>(VlcProfile::Auto));
     m_profileCombo->addItem(QStringLiteral("硬件解码优先"), static_cast<int>(VlcProfile::Hardware));
     m_profileCombo->addItem(QStringLiteral("软件解码（兼容）"), static_cast<int>(VlcProfile::Software));
@@ -1066,9 +1082,9 @@ QWidget* MainWindow::buildSettingsPage()
             [this]() { onAutoSwitchToggled(m_autoSwitch->isChecked()); });
     autoForm->addRow(QStringLiteral("切换间隔"), m_intervalSpin);
 
-    m_autoSwitch = new QCheckBox(QStringLiteral("启用自动切换"), autoBox);
-    m_autoStart = new QCheckBox(QStringLiteral("开机自动启动"), autoBox);
-    m_restoreLast = new QCheckBox(QStringLiteral("启动时恢复上次壁纸"), autoBox);
+    m_autoSwitch = new AnimatedCheckBox(QStringLiteral("启用自动切换"), autoBox);
+    m_autoStart = new AnimatedCheckBox(QStringLiteral("开机自动启动"), autoBox);
+    m_restoreLast = new AnimatedCheckBox(QStringLiteral("启动时恢复上次壁纸"), autoBox);
     connect(m_autoSwitch, &QCheckBox::toggled, this, &MainWindow::onAutoSwitchToggled);
     connect(m_autoStart, &QCheckBox::toggled, this, [this](bool on) { setAutoStart(on); });
     connect(m_restoreLast, &QCheckBox::toggled, this, [this](bool) { saveSettings(); });
@@ -1080,13 +1096,13 @@ QWidget* MainWindow::buildSettingsPage()
     // ---- 切换策略（V4.6）----
     auto* strategyBox = new QGroupBox(QStringLiteral("切换策略"), pane);
     auto* strategyForm = new QFormLayout(strategyBox);
-    m_switchModeCombo = new QComboBox(strategyBox);
+    m_switchModeCombo = new AnimatedComboBox(strategyBox);
     m_switchModeCombo->addItem(QStringLiteral("顺序播放"), 0);
     m_switchModeCombo->addItem(QStringLiteral("随机播放"), 1);
     m_switchModeCombo->addItem(QStringLiteral("随机（不重复）"), 2);
     m_switchModeCombo->setToolTip(QStringLiteral(
         "「随机（不重复）」会先把清单洗一遍，按洗好的顺序走完再洗，不会连续撞上同一张。"));
-    m_switchScopeCombo = new QComboBox(strategyBox);
+    m_switchScopeCombo = new AnimatedComboBox(strategyBox);
     m_switchScopeCombo->addItem(QStringLiteral("全部壁纸"), 0);
     m_switchScopeCombo->addItem(QStringLiteral("仅图片"), 1);
     m_switchScopeCombo->addItem(QStringLiteral("仅视频"), 2);
@@ -1106,14 +1122,14 @@ QWidget* MainWindow::buildSettingsPage()
     auto* ruleLayout = new QVBoxLayout(ruleBox);
     ruleLayout->setContentsMargins(9, 6, 9, 6);
 
-    m_pauseOnRemote = new QCheckBox(QStringLiteral("远程桌面连接时暂停"), ruleBox);
+    m_pauseOnRemote = new AnimatedCheckBox(QStringLiteral("远程桌面连接时暂停"), ruleBox);
     m_pauseOnRemote->setToolTip(QStringLiteral(
         "被远程控制时，桌面画面要编码后经网络上行，继续解码只会白耗 GPU。\n"
         "远程会话断开后自动恢复播放。"));
     connect(m_pauseOnRemote, &QCheckBox::toggled, this, [this](bool) { saveSettings(); });
     ruleLayout->addWidget(m_pauseOnRemote);
 
-    m_hoverPreviewEnabled = new QCheckBox(QStringLiteral("悬停卡片时播放动态预览"), ruleBox);
+    m_hoverPreviewEnabled = new AnimatedCheckBox(QStringLiteral("悬停卡片时播放动态预览"), ruleBox);
     m_hoverPreviewEnabled->setToolTip(QStringLiteral(
         "鼠标在视频卡片上停留约半秒后，在卡片内循环播放一小段画面。\n"
         "预览用独立离线实例抓 8 帧，不干扰正在播放的壁纸；系统繁忙时会自动跳过。"));
@@ -1125,7 +1141,7 @@ QWidget* MainWindow::buildSettingsPage()
     });
     ruleLayout->addWidget(m_hoverPreviewEnabled);
 
-    m_appRulesEnabled = new QCheckBox(QStringLiteral("启用逐应用规则"), ruleBox);
+    m_appRulesEnabled = new AnimatedCheckBox(QStringLiteral("启用逐应用规则"), ruleBox);
     m_appRulesEnabled->setToolTip(QStringLiteral(
         "按「前台窗口所属进程」决定壁纸去留，自上而下匹配，第一条命中即生效：\n"
         "「暂停」= 该程序在前台时暂停壁纸；\n"
@@ -1144,9 +1160,9 @@ QWidget* MainWindow::buildSettingsPage()
     ruleLayout->addWidget(m_ruleList);
 
     auto* ruleButtons = new QHBoxLayout();
-    auto* addRule = new QPushButton(QStringLiteral("添加…"), ruleBox);
-    auto* toggleRule = new QPushButton(QStringLiteral("切换动作"), ruleBox);
-    auto* delRule = new QPushButton(QStringLiteral("删除"), ruleBox);
+    auto* addRule = new AnimatedPushButton(QStringLiteral("添加…"), ruleBox);
+    auto* toggleRule = new AnimatedPushButton(QStringLiteral("切换动作"), ruleBox);
+    auto* delRule = new AnimatedPushButton(QStringLiteral("删除"), ruleBox);
     connect(addRule, &QPushButton::clicked, this, &MainWindow::onAddAppRule);
     connect(toggleRule, &QPushButton::clicked, this, &MainWindow::onToggleAppRule);
     connect(delRule, &QPushButton::clicked, this, &MainWindow::onRemoveAppRule);
@@ -1170,7 +1186,7 @@ QWidget* MainWindow::buildSettingsPage()
     // ---- 定时场景（V4.6）----
     auto* sceneBox = new QGroupBox(QStringLiteral("定时场景"), pane);
     auto* sceneLayout = new QVBoxLayout(sceneBox);
-    m_sceneEnabled = new QCheckBox(QStringLiteral("按时段自动切换壁纸"), sceneBox);
+    m_sceneEnabled = new AnimatedCheckBox(QStringLiteral("按时段自动切换壁纸"), sceneBox);
     m_sceneEnabled->setToolTip(QStringLiteral(
         "给一天里的几个时段各指定一张壁纸，到点自动换。时段不覆盖的时间保持原样。"));
     connect(m_sceneEnabled, &QCheckBox::toggled, this, &MainWindow::onSceneToggled);
@@ -1190,8 +1206,8 @@ QWidget* MainWindow::buildSettingsPage()
     auto* sceneBtnLayout = new QHBoxLayout(sceneBtns);
     sceneBtnLayout->setContentsMargins(0, 0, 0, 0);
     sceneBtnLayout->setSpacing(8);
-    auto* addSceneBtn = new QPushButton(QStringLiteral("添加时段"), sceneBtns);
-    auto* delSceneBtn = new QPushButton(QStringLiteral("删除选中"), sceneBtns);
+    auto* addSceneBtn = new AnimatedPushButton(QStringLiteral("添加时段"), sceneBtns);
+    auto* delSceneBtn = new AnimatedPushButton(QStringLiteral("删除选中"), sceneBtns);
     delSceneBtn->setObjectName(QStringLiteral("danger"));
     connect(addSceneBtn, &QPushButton::clicked, this, &MainWindow::onAddScene);
     connect(delSceneBtn, &QPushButton::clicked, this, &MainWindow::onRemoveScene);
@@ -1205,7 +1221,7 @@ QWidget* MainWindow::buildSettingsPage()
     auto* fxBox = new QGroupBox(QStringLiteral("画面效果"), pane);
     auto* fxForm = new QFormLayout(fxBox);
     auto makeSlider = [fxBox](int min, int max) {
-        auto* slider = new QSlider(Qt::Horizontal, fxBox);
+        auto* slider = new AnimatedSlider(Qt::Horizontal, fxBox);
         slider->setRange(min, max);
         slider->setValue(0);
         return slider;
@@ -1215,7 +1231,7 @@ QWidget* MainWindow::buildSettingsPage()
     m_fxSaturation = makeSlider(-100, 100);
     m_fxBlur = makeSlider(0, 20);
     m_fxVignette = makeSlider(0, 100);
-    m_fxGray = new QCheckBox(QStringLiteral("黑白"), fxBox);
+    m_fxGray = new AnimatedCheckBox(QStringLiteral("黑白"), fxBox);
     for (QSlider* slider : {m_fxBrightness, m_fxContrast, m_fxSaturation, m_fxBlur, m_fxVignette}) {
         connect(slider, &QSlider::valueChanged, this, &MainWindow::onEffectChanged);
     }
@@ -1229,7 +1245,7 @@ QWidget* MainWindow::buildSettingsPage()
 
     auto* fxBtnRow = new QHBoxLayout();
     fxBtnRow->setSpacing(8);
-    auto* resetFxBtn = new QPushButton(QStringLiteral("重置效果"), fxBox);
+    auto* resetFxBtn = new AnimatedPushButton(QStringLiteral("重置效果"), fxBox);
     resetFxBtn->setToolTip(QStringLiteral("把所有画面效果恢复为默认值"));
     connect(resetFxBtn, &QPushButton::clicked, this, &MainWindow::onResetEffects);
     fxBtnRow->addWidget(resetFxBtn);
@@ -1247,19 +1263,19 @@ QWidget* MainWindow::buildSettingsPage()
     // ---- 桌面挂件（V4.6）----
     auto* widgetBox = new QGroupBox(QStringLiteral("桌面挂件"), pane);
     auto* widgetForm = new QFormLayout(widgetBox);
-    m_overlayEnabled = new QCheckBox(QStringLiteral("启用桌面挂件"), widgetBox);
-    m_overlayClock = new QCheckBox(QStringLiteral("时钟"), widgetBox);
-    m_overlayCalendar = new QCheckBox(QStringLiteral("日历"), widgetBox);
-    m_overlayText = new QCheckBox(QStringLiteral("自定义文字"), widgetBox);
+    m_overlayEnabled = new AnimatedCheckBox(QStringLiteral("启用桌面挂件"), widgetBox);
+    m_overlayClock = new AnimatedCheckBox(QStringLiteral("时钟"), widgetBox);
+    m_overlayCalendar = new AnimatedCheckBox(QStringLiteral("日历"), widgetBox);
+    m_overlayText = new AnimatedCheckBox(QStringLiteral("自定义文字"), widgetBox);
     m_overlayTextEdit = new QLineEdit(widgetBox);
     m_overlayTextEdit->setPlaceholderText(QStringLiteral("想写在桌面上的一句话"));
-    m_overlayPosCombo = new QComboBox(widgetBox);
+    m_overlayPosCombo = new AnimatedComboBox(widgetBox);
     m_overlayPosCombo->addItem(QStringLiteral("左上"), 0);
     m_overlayPosCombo->addItem(QStringLiteral("右上"), 1);
     m_overlayPosCombo->addItem(QStringLiteral("左下"), 2);
     m_overlayPosCombo->addItem(QStringLiteral("右下"), 3);
     m_overlayPosCombo->addItem(QStringLiteral("居中"), 4);
-    m_overlayScreenCombo = new QComboBox(widgetBox);
+    m_overlayScreenCombo = new AnimatedComboBox(widgetBox);
     m_overlayScreenCombo->addItem(QStringLiteral("主显示器"), -1);
     m_overlayScreenCombo->addItem(QStringLiteral("全部显示器"), -2);
     m_overlaySize = new QSpinBox(widgetBox);
@@ -1289,7 +1305,7 @@ QWidget* MainWindow::buildSettingsPage()
     // ---- 音乐可视化（V4.6）----
     auto* audioBox = new QGroupBox(QStringLiteral("音乐可视化"), pane);
     auto* audioForm = new QFormLayout(audioBox);
-    m_spectrumEnabled = new QCheckBox(QStringLiteral("在桌面显示频谱"), audioBox);
+    m_spectrumEnabled = new AnimatedCheckBox(QStringLiteral("在桌面显示频谱"), audioBox);
     m_spectrumEnabled->setToolTip(QStringLiteral(
         "采集系统输出声音（WASAPI 回环）画成频谱条，贴在屏幕底边。不播放声音时自动归零。\n"
         "想让它对视频壁纸有反应，把设置 →「视频 → 音量」调到 0 以上即可。"));
@@ -1308,14 +1324,14 @@ QWidget* MainWindow::buildSettingsPage()
     // 设置页放一份镜像：用户调完效果想存成预设时，不用先跳回壁纸库页。
     auto* presetBox = new QGroupBox(QStringLiteral("场景预设"), pane);
     auto* presetForm = new QFormLayout(presetBox);
-    m_monitorPresetCombo = new QComboBox(presetBox);
+    m_monitorPresetCombo = new AnimatedComboBox(presetBox);
     m_monitorPresetCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    auto* presetApplyBtn = new QPushButton(QStringLiteral("应用这个预设"), presetBox);
+    auto* presetApplyBtn = new AnimatedPushButton(QStringLiteral("应用这个预设"), presetBox);
     presetApplyBtn->setObjectName(QStringLiteral("primary"));
     connect(presetApplyBtn, &QPushButton::clicked, this, &MainWindow::onPresetApply);
     // 镜像的意义就是「调完效果就地存」，所以保存得在这里也能按到。
     // （V4.8 把壁纸库页的保存入口收进了「更多」菜单，这一处更不能缺。）
-    auto* presetSaveBtn = new QPushButton(QStringLiteral("保存当前为新预设…"), presetBox);
+    auto* presetSaveBtn = new AnimatedPushButton(QStringLiteral("保存当前为新预设…"), presetBox);
     presetSaveBtn->setToolTip(QStringLiteral("把当前所有设置存成一个新预设（同名则覆盖）"));
     connect(presetSaveBtn, &QPushButton::clicked, this, &MainWindow::onPresetSave);
     auto* presetNote = new QLabel(QStringLiteral(
@@ -1347,8 +1363,8 @@ QWidget* MainWindow::buildSettingsPage()
     triggerLayout->addWidget(m_triggerList);
 
     auto* triggerButtons = new QHBoxLayout();
-    auto* addTrigger = new QPushButton(QStringLiteral("添加…"), triggerBox);
-    auto* delTrigger = new QPushButton(QStringLiteral("删除"), triggerBox);
+    auto* addTrigger = new AnimatedPushButton(QStringLiteral("添加…"), triggerBox);
+    auto* delTrigger = new AnimatedPushButton(QStringLiteral("删除"), triggerBox);
     connect(addTrigger, &QPushButton::clicked, this, &MainWindow::onAddTrigger);
     connect(delTrigger, &QPushButton::clicked, this, &MainWindow::onRemoveTrigger);
     triggerButtons->addWidget(addTrigger);
@@ -1365,9 +1381,9 @@ QWidget* MainWindow::buildSettingsPage()
     // ---- 省电 ----
     auto* powerBox = new QGroupBox(QStringLiteral("省电"), pane);
     auto* powerForm = new QFormLayout(powerBox);
-    m_pauseOnLock = new QCheckBox(QStringLiteral("锁屏时暂停"), powerBox);
-    m_pauseOnBattery = new QCheckBox(QStringLiteral("使用电池时暂停"), powerBox);
-    m_pauseOnFullscreen = new QCheckBox(QStringLiteral("全屏应用时暂停"), powerBox);
+    m_pauseOnLock = new AnimatedCheckBox(QStringLiteral("锁屏时暂停"), powerBox);
+    m_pauseOnBattery = new AnimatedCheckBox(QStringLiteral("使用电池时暂停"), powerBox);
+    m_pauseOnFullscreen = new AnimatedCheckBox(QStringLiteral("全屏应用时暂停"), powerBox);
     m_pauseOnFullscreen->setToolTip(QStringLiteral(
         "前台窗口占满整个显示器时（游戏、全屏播放器）桌面壁纸看不见，暂停解码可省 5%-15% CPU。"));
     connect(m_pauseOnFullscreen, &QCheckBox::toggled, this, [this](bool) {
@@ -1385,7 +1401,7 @@ QWidget* MainWindow::buildSettingsPage()
     auto* idleRow = new QWidget(powerBox);
     auto* idleLayout = new QHBoxLayout(idleRow);
     idleLayout->setContentsMargins(0, 0, 0, 0);
-    m_pauseOnIdle = new QCheckBox(QStringLiteral("空闲时暂停"), idleRow);
+    m_pauseOnIdle = new AnimatedCheckBox(QStringLiteral("空闲时暂停"), idleRow);
     m_pauseOnIdle->setToolTip(QStringLiteral(
         "整个系统没有鼠标移动、没有按键达到设定时长后，暂停视频壁纸（画面停在当前帧）。\n"
         "一有任何键鼠输入立即续播，间隔不超过 0.5 秒。"));
@@ -1448,7 +1464,7 @@ QWidget* MainWindow::buildSettingsPage()
     // ---- 其它 ----
     auto* miscBox = new QGroupBox(QStringLiteral("其它"), pane);
     auto* miscForm = new QFormLayout(miscBox);
-    m_videoThumbnails = new QCheckBox(QStringLiteral("生成视频缩略图"), miscBox);
+    m_videoThumbnails = new AnimatedCheckBox(QStringLiteral("生成视频缩略图"), miscBox);
     m_videoThumbnails->setToolTip(QStringLiteral("关闭后视频项使用占位图，可避免大文件解码开销。"));
     connect(m_videoThumbnails, &QCheckBox::toggled, this, [this](bool on) {
         if (on) {
@@ -1460,7 +1476,7 @@ QWidget* MainWindow::buildSettingsPage()
     });
     miscForm->addRow(QString(), m_videoThumbnails);
 
-    m_thumbSizeCombo = new QComboBox(miscBox);
+    m_thumbSizeCombo = new AnimatedComboBox(miscBox);
     m_thumbSizeCombo->addItem(QStringLiteral("小（128 px）"), 0);
     m_thumbSizeCombo->addItem(QStringLiteral("中（160 px）"), 1);
     m_thumbSizeCombo->addItem(QStringLiteral("大（208 px）"), 2);
@@ -1473,7 +1489,7 @@ QWidget* MainWindow::buildSettingsPage()
             this, &MainWindow::onThumbSizeChanged);
     miscForm->addRow(QStringLiteral("缩略图尺寸"), m_thumbSizeCombo);
 
-    m_portable = new QCheckBox(QStringLiteral("便携模式（重启后生效）"), miscBox);
+    m_portable = new AnimatedCheckBox(QStringLiteral("便携模式（重启后生效）"), miscBox);
     m_portable->setChecked(AppPaths::portable());
     m_portable->setToolTip(QStringLiteral(
         "启用后配置与数据全部保存在程序目录的 data 文件夹内，不写注册表，"
@@ -1481,11 +1497,11 @@ QWidget* MainWindow::buildSettingsPage()
     connect(m_portable, &QCheckBox::toggled, this, &MainWindow::onPortableToggled);
     miscForm->addRow(QString(), m_portable);
 
-    auto* dataBtn = new QPushButton(QStringLiteral("打开数据目录"), miscBox);
+    auto* dataBtn = new AnimatedPushButton(QStringLiteral("打开数据目录"), miscBox);
     auto* toolRow = new QHBoxLayout();
-    auto* locateBtn = new QPushButton(QStringLiteral("定位 libvlc"), miscBox);
-    auto* cacheBtn = new QPushButton(QStringLiteral("清理缓存"), miscBox);
-    auto* logBtn = new QPushButton(QStringLiteral("打开日志"), miscBox);
+    auto* locateBtn = new AnimatedPushButton(QStringLiteral("定位 libvlc"), miscBox);
+    auto* cacheBtn = new AnimatedPushButton(QStringLiteral("清理缓存"), miscBox);
+    auto* logBtn = new AnimatedPushButton(QStringLiteral("打开日志"), miscBox);
     connect(dataBtn, &QPushButton::clicked, this, [this] { openFolder(AppPaths::dataDir()); });
     connect(locateBtn, &QPushButton::clicked, this, &MainWindow::onLocateBackend);
     connect(cacheBtn, &QPushButton::clicked, this, &MainWindow::onClearThumbCache);
@@ -1498,8 +1514,8 @@ QWidget* MainWindow::buildSettingsPage()
     miscForm->addRow(toolRow);
 
     auto* helpRow = new QHBoxLayout();
-    auto* aboutBtn = new QPushButton(QStringLiteral("关于 WallDesk"), miscBox);
-    auto* quitBtn = new QPushButton(QStringLiteral("退出程序"), miscBox);
+    auto* aboutBtn = new AnimatedPushButton(QStringLiteral("关于 WallDesk"), miscBox);
+    auto* quitBtn = new AnimatedPushButton(QStringLiteral("退出程序"), miscBox);
     quitBtn->setObjectName(QStringLiteral("danger"));
     connect(aboutBtn, &QPushButton::clicked, this, &MainWindow::onAbout);
     connect(quitBtn, &QPushButton::clicked, this, &MainWindow::onQuit);
@@ -1548,6 +1564,15 @@ QWidget* MainWindow::buildSettingsPage()
 }
 
 // ---------------------------------------------------------------- 设置子页缓动（V4.14）
+
+// ---------------------------------------------------------------- 场景级淡入（V4.17 / P2）
+
+void MainWindow::fadeInWidget(QWidget* host, int ms)
+{
+    // 用自绘遮罩而不是 QGraphicsOpacityEffect：后者对整页做 opacity 动画时
+    // 本机不逐帧重绘（动画期间屏幕停在旧像素，结束才跳变），详见 FadeOverlay.h。
+    FadeOverlay::play(host, ms, palette().color(QPalette::Window));
+}
 
 void MainWindow::animateSettingsPage(int row, bool pageVisible)
 {
@@ -1651,10 +1676,10 @@ QWidget* MainWindow::buildMonitorsPage()
     auto* btnLayout = new QHBoxLayout(btns);
     btnLayout->setContentsMargins(0, 0, 0, 0);
     btnLayout->setSpacing(8);
-    auto* refreshBtn = new QPushButton(QStringLiteral("刷新显示器"), btns);
-    auto* applyBtn = new QPushButton(QStringLiteral("应用全部"), btns);
+    auto* refreshBtn = new AnimatedPushButton(QStringLiteral("刷新显示器"), btns);
+    auto* applyBtn = new AnimatedPushButton(QStringLiteral("应用全部"), btns);
     applyBtn->setObjectName(QStringLiteral("primary"));
-    auto* resetBtn = new QPushButton(QStringLiteral("全部跟随主设置"), btns);
+    auto* resetBtn = new AnimatedPushButton(QStringLiteral("全部跟随主设置"), btns);
     connect(refreshBtn, &QPushButton::clicked, this, [this]() { refreshMonitorRows(); });
     connect(applyBtn, &QPushButton::clicked, this, &MainWindow::onMonitorsApply);
     connect(resetBtn, &QPushButton::clicked, this, &MainWindow::onMonitorsReset);
@@ -1688,7 +1713,7 @@ void MainWindow::refreshMonitorRows()
 
     const QList<MonitorInfo> monitors = WallpaperEngine::listMonitors();
     for (int i = 0; i < monitors.size(); ++i) {
-        auto* combo = new QComboBox(m_monitorRows);
+        auto* combo = new AnimatedComboBox(m_monitorRows);
         combo->addItem(QStringLiteral("跟随主设置"), QString());
         for (const MediaItem& item : m_items) {
             if (item.type == MediaItem::Type::Image) {
@@ -2025,7 +2050,7 @@ void MainWindow::loadSettings()
             to->setDisplayFormat(QStringLiteral("HH:mm"));
             to->setTime(QTime::fromString(s.value(QStringLiteral("to")).toString(),
                                           QStringLiteral("HH:mm")));
-            auto* combo = new QComboBox(m_sceneTable);
+            auto* combo = new AnimatedComboBox(m_sceneTable);
             combo->addItem(QStringLiteral("（请选择）"), QString());
             for (const MediaItem& item : m_items) {
                 combo->addItem(QFileInfo(item.path).fileName(), item.path);
@@ -2319,10 +2344,15 @@ void MainWindow::onResolutionFilterChanged()
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
-    // 状态胶囊：点一下展开 / 收起（QFrame 没有 clicked 信号）
-    if (m_capsule && watched == m_capsule && event->type() == QEvent::MouseButtonRelease) {
-        toggleStatusCapsule();
-        return true;
+    // 状态胶囊：悬浮停住 200ms 弹详情，移走立即收起（QFrame 没有 hovered 信号）
+    if (m_capsule && watched == m_capsule) {
+        if (event->type() == QEvent::Enter) {
+            if (m_capsuleHoverTimer) {
+                m_capsuleHoverTimer->start();
+            }
+        } else if (event->type() == QEvent::Leave) {
+            hideCapsuleDetail();
+        }
     }
     if (m_list && watched == m_list->viewport()) {
         switch (event->type()) {
@@ -2655,21 +2685,39 @@ void MainWindow::importPaths(const QStringList& paths)
 
 void MainWindow::buildStatusCapsule(QWidget* parent)
 {
+    // V4.17：从「浮在内容右下角」改为「嵌进状态栏最右侧」。
+    // 原来用绝对定位压在 centralWidget 上，会盖住列表最后一行和滚动条，
+    // 且深色底在浅色主题里像贴上去的一块补丁。放进状态栏后由 QSS 跟主题走。
     m_capsule = new QFrame(parent);
     m_capsule->setObjectName(QStringLiteral("statusCapsule"));
-    m_capsule->setCursor(Qt::PointingHandCursor);
-    m_capsule->setToolTip(QStringLiteral("点击展开 / 收起诊断详情"));
-    m_capsule->setStyleSheet(QStringLiteral(
-        "#statusCapsule{background:rgba(16,22,34,0.78);border-radius:11px;}"
-        "#statusCapsule QLabel{color:#e9eefb;font-size:11px;}"));
-    auto* lay = new QVBoxLayout(m_capsule);
-    lay->setContentsMargins(11, 5, 13, 6);
+    m_capsule->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    auto* lay = new QHBoxLayout(m_capsule);
+    lay->setContentsMargins(9, 2, 9, 2);
     lay->setSpacing(0);
     m_capsuleLabel = new QLabel(m_capsule);
     m_capsuleLabel->setTextFormat(Qt::PlainText);
     lay->addWidget(m_capsuleLabel);
-
     m_capsule->installEventFilter(this);
+    statusBar()->addPermanentWidget(m_capsule, 0);
+
+    // 详情浮层：独立 ToolTip 窗口。不用「把胶囊撑成多行」是因为状态栏一变高，
+    // 整个页面会被顶上去，鼠标一进一出就抖；浮层只覆盖在页面之上，布局零影响。
+    m_capsuleDetail = new QFrame(nullptr, Qt::ToolTip | Qt::FramelessWindowHint);
+    m_capsuleDetail->setObjectName(QStringLiteral("capsuleDetail"));
+    m_capsuleDetail->setAttribute(Qt::WA_ShowWithoutActivating, true);
+    m_capsuleDetail->setAttribute(Qt::WA_TranslucentBackground, true); // 圆角外透明
+    auto* detailLayout = new QVBoxLayout(m_capsuleDetail);
+    detailLayout->setContentsMargins(12, 9, 14, 10);
+    detailLayout->setSpacing(0);
+    m_capsuleDetailLabel = new QLabel(m_capsuleDetail);
+    m_capsuleDetailLabel->setTextFormat(Qt::PlainText);
+    detailLayout->addWidget(m_capsuleDetailLabel);
+    m_capsuleDetail->hide();
+
+    m_capsuleHoverTimer = new QTimer(this);
+    m_capsuleHoverTimer->setSingleShot(true);
+    m_capsuleHoverTimer->setInterval(200); // 扫过不弹，停住才弹
+    connect(m_capsuleHoverTimer, &QTimer::timeout, this, &MainWindow::showCapsuleDetail);
 
     // 拖拽投放高亮：整块半透明蓝框 + 提示文字，拖拽期间才显示
     m_dropHint = new QFrame(parent);
@@ -2693,35 +2741,51 @@ void MainWindow::buildStatusCapsule(QWidget* parent)
     refreshStatusCapsule();
 }
 
-void MainWindow::layoutStatusCapsule()
+void MainWindow::showCapsuleDetail()
 {
-    if (!m_capsule || !centralWidget()) {
+    if (!m_capsule || !m_capsuleDetail) {
         return;
     }
-    m_capsule->adjustSize();
-    const QSize hint = m_capsule->sizeHint();
-    const int x = qMax(8, centralWidget()->width() - hint.width() - 18);
-    const int y = qMax(8, centralWidget()->height() - hint.height() - 14);
-    m_capsule->setGeometry(x, y, hint.width(), hint.height());
-    m_capsule->raise();
+    // 缓存统计要遍历目录，只在真正展示时算一次；窗口小时把行数压掉也不能算漏
+    const QDir dir(ThumbnailLoader::cacheDir());
+    const QFileInfoList files = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
+    qint64 bytes = 0;
+    for (const QFileInfo& fi : files) {
+        bytes += fi.size();
+    }
+    m_capsuleCacheText = QStringLiteral("缩略图缓存：%1 个 / %2 MB")
+                             .arg(files.size())
+                             .arg(QString::number(bytes / 1048576.0, 'f', 1));
+    refreshStatusCapsule();
+
+    m_capsuleDetail->adjustSize();
+    const int width = qMax(m_capsuleDetail->width(), m_capsule->width());
+    m_capsuleDetail->resize(width, m_capsuleDetail->height());
+
+    const QPoint anchor = m_capsule->mapToGlobal(QPoint(0, 0));
+    QRect avail(0, 0, 1280, 800);
+    if (const QScreen* scr = QGuiApplication::screenAt(anchor)) {
+        avail = scr->availableGeometry();
+    }
+    int x = anchor.x() + m_capsule->width() - width;
+    int y = anchor.y() - m_capsuleDetail->height() - 8;
+    if (y < avail.top() + 4) {
+        y = anchor.y() + m_capsule->height() + 8; // 上方放不下就翻到下方
+    }
+    x = qBound(avail.left() + 4, x, qMax(avail.left() + 4, avail.right() - width - 4));
+    m_capsuleDetail->move(x, y);
+    m_capsuleDetail->show();
+    m_capsuleDetail->raise();
 }
 
-void MainWindow::toggleStatusCapsule()
+void MainWindow::hideCapsuleDetail()
 {
-    m_capsuleExpanded = !m_capsuleExpanded;
-    if (m_capsuleExpanded) {
-        // 缓存统计要遍历目录，只在展开时算一次
-        const QDir dir(ThumbnailLoader::cacheDir());
-        const QFileInfoList files = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
-        qint64 bytes = 0;
-        for (const QFileInfo& fi : files) {
-            bytes += fi.size();
-        }
-        m_capsuleCacheText = QStringLiteral("缩略图缓存：%1 个 / %2 MB")
-                                 .arg(files.size())
-                                 .arg(QString::number(bytes / 1048576.0, 'f', 1));
+    if (m_capsuleHoverTimer) {
+        m_capsuleHoverTimer->stop();
     }
-    refreshStatusCapsule();
+    if (m_capsuleDetail && m_capsuleDetail->isVisible()) {
+        m_capsuleDetail->hide();
+    }
 }
 
 void MainWindow::refreshStatusCapsule()
@@ -2746,21 +2810,22 @@ void MainWindow::refreshStatusCapsule()
         fps = 0.0;
     }
 
-    if (!m_capsuleExpanded) {
-        if (video.isEmpty()) {
-            m_capsuleLabel->setText(QStringLiteral("待机 · 内存 %1").arg(mem));
-        } else {
-            const MediaInfo info = MediaInfoProbe::probe(video);
-            const QString res = info.valid()
-                                    ? QStringLiteral("%1×%2").arg(info.width).arg(info.height)
-                                    : QStringLiteral("—");
-            m_capsuleLabel->setText(QStringLiteral("%1 · %2 · %3 fps · %4")
-                                        .arg(profile, res,
-                                             fps > 0 ? QString::number(fps, 'f', 1)
-                                                     : QStringLiteral("—"),
-                                             mem));
-        }
+    // 简略：只留「分辨率 · 帧率 · 内存」三个用户真会看的数，其余进悬浮详情
+    if (video.isEmpty()) {
+        m_capsuleLabel->setText(QStringLiteral("待机 · 内存 %1").arg(mem));
     } else {
+        const MediaInfo info = MediaInfoProbe::probe(video);
+        const QString res = info.valid()
+                                ? QStringLiteral("%1×%2").arg(info.width).arg(info.height)
+                                : QStringLiteral("—");
+        m_capsuleLabel->setText(QStringLiteral("%1 · %2 fps · %3")
+                                    .arg(res,
+                                         fps > 0 ? QString::number(fps, 'f', 1)
+                                                 : QStringLiteral("—"),
+                                         mem));
+    }
+
+    if (m_capsuleDetailLabel) {
         QStringList lines;
         lines << QStringLiteral("解码档位：%1").arg(profile);
         if (m_engine.videoBackendReady()) {
@@ -2787,9 +2852,8 @@ void MainWindow::refreshStatusCapsule()
         lines << QStringLiteral("内存：%1（峰值 %2）").arg(mem, peak);
         lines << QStringLiteral("运行时长：%1")
                      .arg(humanDuration(m_startedAt.secsTo(QDateTime::currentDateTime())));
-        m_capsuleLabel->setText(lines.join(QLatin1Char('\n')));
+        m_capsuleDetailLabel->setText(lines.join(QLatin1Char('\n')));
     }
-    layoutStatusCapsule();
 }
 
 void MainWindow::refreshList()
@@ -2841,7 +2905,13 @@ void MainWindow::refreshList()
                                            : QStringLiteral("壁纸库 · %1 / %2 项").arg(shown).arg(total)));
     }
     if (m_galleryStack) {
-        m_galleryStack->setCurrentIndex(m_items.isEmpty() ? 1 : 0);
+        const int target = m_items.isEmpty() ? 1 : 0;
+        const bool changed = (m_galleryStack->currentIndex() != target);
+        m_galleryStack->setCurrentIndex(target);
+        // 空状态 ↔ 列表的切换也走淡入，否则删掉最后一项时整块内容会突然换脸
+        if (changed && m_galleryStack->isVisible()) {
+            fadeInWidget(m_galleryStack->currentWidget(), 160);
+        }
     }
     requestVisibleThumbnails();
 
@@ -3519,7 +3589,7 @@ void MainWindow::onAddScene()
     auto* to = new QTimeEdit(m_sceneTable);
     to->setDisplayFormat(QStringLiteral("HH:mm"));
     to->setTime(QTime(18, 0));
-    auto* combo = new QComboBox(m_sceneTable);
+    auto* combo = new AnimatedComboBox(m_sceneTable);
     combo->addItem(QStringLiteral("（请选择）"), QString());
     for (const MediaItem& item : m_items) {
         combo->addItem(QFileInfo(item.path).fileName(), item.path);
@@ -3720,7 +3790,8 @@ void MainWindow::resizeEvent(QResizeEvent* event)
     if (m_thumbTimer) {
         m_thumbTimer->start();
     }
-    layoutStatusCapsule();
+    // 胶囊已嵌入状态栏，位置跟着布局走；悬浮浮层是按旧几何算的，缩放后必须收掉
+    hideCapsuleDetail();
 }
 
 void MainWindow::updateGalleryMetrics()

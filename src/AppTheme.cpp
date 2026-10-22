@@ -66,16 +66,19 @@ const Palette& paletteFor(ThemeKind kind)
     return (kind == ThemeKind::Dark) ? kDark : kLight;
 }
 
+/** 当前生效主题（resolve 后的实际值）。apply() 时更新，动画控件现取。 */
+ThemeKind g_currentKind = ThemeKind::Light;
+
 /** 样式表模板，占位符形如 {window}，由 applyTemplate 替换。 */
 const char* const kTemplate = R"(
 QMainWindow, QDialog { background: {window}; }
 QWidget { color: {text}; }
 
-/* ---- 分组卡片 ---- */
+/* ---- 分组卡片（M3 medium 12px 圆角）---- */
 QGroupBox {
     background: {card};
     border: 1px solid {border};
-    border-radius: 8px;
+    border-radius: 12px;
     margin-top: 10px;
     padding: 8px 8px 6px 8px;
     font-weight: 600;
@@ -89,12 +92,15 @@ QGroupBox::title {
 }
 
 /* ---- 按钮 ---- */
+/* 注：AnimatedPushButton（壁纸库/设置页全部按钮）为全自绘，此处 QSS 对它不生效，
+   保留 hover/pressed 规则是给标准对话框（QMessageBox/QInputDialog）里的原生
+   QPushButton 兜底。圆角/高度按 M3 大圆角方向统一。 */
 QPushButton {
     background: {card};
     border: 1px solid {border};
-    border-radius: 8px;
-    padding: 7px 14px;
-    min-height: 16px;
+    border-radius: 20px;
+    padding: 5px 14px;
+    min-height: 18px;
 }
 QPushButton:hover { border-color: {accent}; background: {hover}; }
 QPushButton:pressed { background: {accentSoft}; }
@@ -109,7 +115,7 @@ QPushButton#primary:hover { background: {accentHover}; border-color: {accentHove
 QPushButton#primary:disabled { background: {accentSoft}; border-color: {accentSoft}; color: {disabled}; }
 QPushButton#danger:hover { border-color: #DC2626; color: #DC2626; }
 
-/* ---- 输入控件 ---- */
+/* ---- 输入控件（M3 small 8px）---- */
 QComboBox, QSpinBox, QLineEdit {
     background: {card};
     border: 1px solid {border};
@@ -118,6 +124,9 @@ QComboBox, QSpinBox, QLineEdit {
     min-height: 18px;
 }
 QComboBox:hover, QSpinBox:hover { border-color: {accent}; }
+/* 微调框自带上下按钮，尺寸由 style 的 CT_SpinBox 算出，比同样式的下拉高 4px；
+   单独把纵向 padding 减 2 抵消，让同一行里的控件齐平（max-height 对 sizeHint 无效）。 */
+QSpinBox { padding: 3px 10px; }
 QComboBox QAbstractItemView {
     background: {card};
     border: 1px solid {border};
@@ -127,7 +136,9 @@ QComboBox QAbstractItemView {
     padding: 4px;
 }
 QComboBox::drop-down { border: none; width: 18px; }
-QSpinBox::up-button, QSpinBox::down-button { width: 16px; border: none; background: transparent; }
+QSpinBox::up-button, QSpinBox::down-button {
+    width: 16px; height: 12px; border: none; background: transparent;
+}
 
 /* ---- 列表（缩略图画廊） ---- */
 QListWidget {
@@ -152,12 +163,35 @@ QSlider::handle:horizontal {
 }
 QSlider::handle:horizontal:hover { background: {accentSoft}; }
 
-/* ---- 复选框 ---- */
+/* ---- 复选框（18px，M3 触摸目标）----
+   indicator 的填充/边框/勾由 AnimatedCheckBox 自绘（QSS 无 transition），
+   这里只声明尺寸，保证布局与 sizeHint 不随自绘改动。 */
 QCheckBox { spacing: 8px; }
-QCheckBox::indicator { width: 16px; height: 16px; border-radius: 4px; border: 1px solid {border}; background: {card}; }
-QCheckBox::indicator:hover { border-color: {accent}; }
-QCheckBox::indicator:checked { background: {accent}; border-color: {accent}; }
+QCheckBox::indicator { width: 18px; height: 18px; }
 QCheckBox:disabled { color: {disabled}; }
+
+/* ---- 单选框（V4.17）----
+   原来这里没有任何规则，走的是 Windows 原生圆点，和自绘的复选框摆在同一张表单里
+   像两个时代的控件。QSS 画 M3 的「accent 环 + 中心点」，不做动画（静态断言够用）。 */
+QRadioButton { spacing: 8px; }
+QRadioButton::indicator {
+    width: 18px; height: 18px;
+    border-radius: 9px;
+    border: 1px solid {border};
+    background: {card};
+}
+QRadioButton::indicator:hover { border-color: {accent}; border-radius: 9px; }
+/* 注意：伪类规则会整体替换基础规则，border-radius 必须在每条里重复声明，
+   否则选中态回落成直角方块（`#primary:disabled` 踩过同一个坑）。 */
+QRadioButton::indicator:checked {
+    border: 2px solid {accent};
+    border-radius: 9px;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+                                stop:0 {accent}, stop:0.5 {accent},
+                                stop:0.51 {card}, stop:1 {card});
+}
+QRadioButton:disabled { color: {disabled}; }
+QRadioButton::indicator:disabled { border-color: {border}; background: {card}; border-radius: 9px; }
 
 /* ---- 滚动条 ---- */
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
@@ -189,6 +223,13 @@ QStatusBar { background: {window}; color: {subText}; border-top: 1px solid {bord
 QStatusBar::item { border: none; }
 QStatusBar QLabel { padding: 0 4px; }
 
+/* ---- 底部状态胶囊（V4.17：嵌入状态栏最右侧，悬浮出详情浮层） ---- */
+QFrame#statusCapsule { background: {card}; border: 1px solid {border}; border-radius: 9px; }
+QFrame#statusCapsule:hover { border-color: {accent}; }
+QFrame#statusCapsule QLabel { color: {subText}; font-size: 11px; padding: 0; }
+QFrame#capsuleDetail { background: {card}; border: 1px solid {border}; border-radius: 10px; }
+QFrame#capsuleDetail QLabel { color: {text}; font-size: 11px; padding: 0; }
+
 /* ---- 左侧导航栏 ---- */
 QListWidget#navRail {
     background: {window};
@@ -206,6 +247,28 @@ QListWidget#navRail::item {
 }
 QListWidget#navRail::item:hover { background: {hover}; color: {text}; }
 QListWidget#navRail::item:selected { background: {accentSoft}; color: {text}; }
+
+/* ---- 设置子导航（V4.17）----
+   以前和主导航共用 navRail 样式，两列都带 accentSoft 选中块，截图里像两个并列的一级入口。
+   子导航改成透明底 + 选中只变字色，层级一眼可分。 */
+QListWidget#settingsNav {
+    background: transparent;
+    border: none;
+    padding: 8px 4px;
+    outline: none;
+}
+QListWidget#settingsNav::item {
+    padding: 7px 10px;
+    margin: 1px 2px;
+    border-radius: 7px;
+    color: {subText};
+}
+QListWidget#settingsNav::item:hover { background: {hover}; color: {text}; }
+QListWidget#settingsNav::item:selected {
+    background: transparent;
+    color: {accent};
+    font-weight: 600;
+}
 
 /* ---- 页头 / 空状态（V4.5） ---- */
 QLabel#pageTitle { font-size: 16px; font-weight: 700; color: {text}; padding: 0 2px; }
@@ -289,6 +352,26 @@ QString AppTheme::accentColor(ThemeKind kind)
     return QString::fromLatin1(paletteFor(resolve(kind)).accent);
 }
 
+ThemeKind AppTheme::current()
+{
+    return g_currentKind;
+}
+
+QColor AppTheme::buttonBaseColor(ThemeKind kind)
+{
+    return QColor(QString::fromLatin1(paletteFor(resolve(kind)).card));
+}
+
+QColor AppTheme::buttonBorderColor(ThemeKind kind)
+{
+    return QColor(QString::fromLatin1(paletteFor(resolve(kind)).border));
+}
+
+QColor AppTheme::accentSoftColor(ThemeKind kind)
+{
+    return QColor(QString::fromLatin1(paletteFor(resolve(kind)).accentSoft));
+}
+
 QString AppTheme::styleSheet(ThemeKind kind)
 {
     return applyTemplate(QString::fromLatin1(kTemplate), variablesFor(paletteFor(kind)));
@@ -298,6 +381,7 @@ void AppTheme::apply(ThemeKind kind)
 {
     const ThemeKind resolved = resolve(kind);
     const Palette& c = paletteFor(resolved);
+    g_currentKind = resolved;
 
     // Fusion 是 Qt 内置样式里唯一能配合调色板把深色主题渲染干净的一个
     if (QStyle* fusion = QStyleFactory::create(QStringLiteral("Fusion"))) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QString>
 #include <QStringList>
 
@@ -26,6 +27,18 @@ public:
 
     /** 主色调，供自绘图标等复用。 */
     static QString accentColor(ThemeKind kind);
+
+    /** 当前生效主题（apply() 时记录的 resolve 后值），供动画控件现取色值。 */
+    static ThemeKind current();
+
+    /** 次级按钮底色（card 色），AnimatedPushButton 自绘用。 */
+    static QColor buttonBaseColor(ThemeKind kind);
+
+    /** 次级按钮边框色（border 色），AnimatedPushButton 自绘用。 */
+    static QColor buttonBorderColor(ThemeKind kind);
+
+    /** 主色浅底（accentSoft），禁用态主按钮自绘用。 */
+    static QColor accentSoftColor(ThemeKind kind);
 
 private:
     static QString styleSheet(ThemeKind kind);

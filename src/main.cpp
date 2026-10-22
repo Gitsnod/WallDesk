@@ -9,6 +9,7 @@
 #include "Logger.h"
 #include "MainWindow.h"
 #include "SingleInstance.h"
+#include "ui/MenuFade.h"
 
 int main(int argc, char* argv[])
 {
@@ -26,6 +27,7 @@ int main(int argc, char* argv[])
     QCoreApplication::setApplicationName(QStringLiteral("WallDesk"));
     QCoreApplication::setApplicationVersion(QStringLiteral(WALLDESK_VERSION));
     QApplication::setQuitOnLastWindowClosed(false); // 关窗后仍靠托盘常驻
+    MenuFade::install(); // 菜单淡入：全局过滤器，不替换构造点
 
     // ---- 命令行 ----
     QCommandLineParser parser;

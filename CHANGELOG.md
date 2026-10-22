@@ -10,6 +10,38 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.17.0] - 2026-10-22
+
+### 新增（Added）
+
+- **界面动效体系**：按钮 hover 叠加 8% state layer、按压 10% 并下沉 1px、触点 ripple
+  扩散 400ms（长按满 225ms 才起）、键盘焦点环自绘；下拉弹层展开 + 淡入 + 箭头旋转；
+  复选框勾分两段描出（约 120ms）；滑块 handle 悬停放大并带光晕；菜单弹出 200ms 淡入。
+  按 M3 motion token 取时长与贝塞尔曲线（Standard 200/250/300、Emphasized 400/500），
+  系统「关闭动画效果」时全部瞬时完成。
+- **场景级淡入**：壁纸库 / 设置 / 多屏 之间切换时，整页从背景色淡入 200ms；
+  壁纸库在「空状态」与「列表」之间切换时淡入 160ms。
+- **底部状态胶囊**：实时帧率与内存占用胶囊嵌进状态栏最右侧，配色跟随主题；
+  鼠标悬浮 200ms 后在胶囊上方弹出详情浮层（解码档位、下发参数、媒体与分辨率、
+  实时帧率、缩略图缓存、内存峰值、运行时长），移开立即收起。
+
+### 变更（Changed）
+
+- 控件高度按内容收紧并与同类齐平：按钮、下拉、输入框统一 30px 级，
+  微调框单独抵消自带上下按钮带来的 4px 增量。
+- 设置子导航与左侧主导航拉开层级：子导航改透明底、选中只变字色，
+  不再出现两个同为蓝底的「选中项」并排。
+- 单选按钮改为 M3 样式（accent 环 + 中心圆点），与自绘复选框统一观感。
+
+### 修复（Fixed）
+
+- 「应用选中」等主按钮在禁用态被画成直角方块：`QPushButton#primary:disabled`
+  这条更具体的选择器没声明 `border-radius`，Qt 用伪类规则整体替换基础规则后回落成直角。
+- 单选按钮选中态同样的方角问题（`QRadioButton::indicator:checked` 缺 `border-radius`）。
+- 按钮首次悬停是瞬跳而非渐变：动画起点用 `underMouse()` 反推，Enter 到达时它已为真，
+  起点等于终点；改为自持强度值。
+- 状态胶囊原先浮在内容右下角，深色底色在浅色主题下像贴片，且会盖住列表末行与滚动条。
+
 ## [4.16.0] - 2026-10-21
 
 ### 新增（Added）
@@ -358,7 +390,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.16.0...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.17.0...HEAD
+[4.17.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.17.0
 [4.16.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.16.0
 [4.15.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.15.0
 [4.14.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.14.0

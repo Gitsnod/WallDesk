@@ -36,6 +36,13 @@ FILES = [
     "PresetManager.h", "PresetManager.cpp",
     "OnlineSources.h", "OnlineSources.cpp",
     "MediaInfo.h", "MediaInfo.cpp",
+    "ui/MotionTokens.h", "ui/MotionTokens.cpp",
+    "ui/AnimatedPushButton.h", "ui/AnimatedPushButton.cpp",
+    "ui/AnimatedComboBox.h", "ui/AnimatedComboBox.cpp",
+    "ui/AnimatedCheckBox.h", "ui/AnimatedCheckBox.cpp",
+    "ui/AnimatedSlider.h", "ui/AnimatedSlider.cpp",
+    "ui/MenuFade.h", "ui/MenuFade.cpp",
+    "ui/FadeOverlay.h", "ui/FadeOverlay.cpp",
 ]
 
 # 声明/定义配对
@@ -55,7 +62,14 @@ PAIRS = [("MainWindow.h", "MainWindow.cpp"),
          ("AudioSpectrum.h", "AudioSpectrum.cpp"),
          ("PresetManager.h", "PresetManager.cpp"),
          ("OnlineSources.h", "OnlineSources.cpp"),
-         ("MediaInfo.h", "MediaInfo.cpp")]
+         ("MediaInfo.h", "MediaInfo.cpp"),
+         ("ui/MotionTokens.h", "ui/MotionTokens.cpp"),
+         ("ui/AnimatedPushButton.h", "ui/AnimatedPushButton.cpp"),
+         ("ui/AnimatedComboBox.h", "ui/AnimatedComboBox.cpp"),
+         ("ui/AnimatedCheckBox.h", "ui/AnimatedCheckBox.cpp"),
+         ("ui/AnimatedSlider.h", "ui/AnimatedSlider.cpp"),
+         ("ui/MenuFade.h", "ui/MenuFade.cpp"),
+         ("ui/FadeOverlay.h", "ui/FadeOverlay.cpp")]
 
 # 通过 else 分支隐式覆盖的枚举项：不需要显式出现枚举名
 IMPLICIT_ENUM = {"ScreenTarget::Primary": "target == ScreenTarget::Virtual"}

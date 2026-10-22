@@ -32,6 +32,9 @@ Desktop.ini
 test_wallpaper.bmp
 verify_*.png
 
+# 测试素材（视频体积大，由 tools/ 下脚本按需生成，不入库）
+testdata/
+
 # 本地临时脚本与日志（打包/调试用，不入库）
 _release_*.ps1
 _release_*.bat
