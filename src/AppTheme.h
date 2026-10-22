@@ -40,6 +40,12 @@ public:
     /** 主色浅底（accentSoft），禁用态主按钮自绘用。 */
     static QColor accentSoftColor(ThemeKind kind);
 
+    /** 主文字色（text），自绘下拉箭头等用。 */
+    static QColor textColor(ThemeKind kind);
+
+    /** 次要文字色（subText），自绘箭头默认态用。 */
+    static QColor subTextColor(ThemeKind kind);
+
 private:
     static QString styleSheet(ThemeKind kind);
 };

@@ -1,351 +1,166 @@
-# WallDesk — Windows 图片 / 视频壁纸工具（C++）
+# WallDesk
 
-管理图片与视频清单，一键切换桌面壁纸；视频壁纸挂载到桌面 `WorkerW` 图层
-（位于桌面图标**下方**，不拦截鼠标、不影响右键菜单）。
+[![版本](https://img.shields.io/badge/version-4.18.0-2563EB)](https://github.com/Gitsnod/WallDesk/releases/latest)
+[![平台](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)](#系统要求)
+[![许可](https://img.shields.io/badge/license-MIT-16A34A)](LICENSE)
 
-技术栈：C++17 + Qt Widgets + Win32 API + libVLC（运行时动态加载，可内嵌进 exe）。
+**Windows 上的图片 / 视频桌面壁纸工具。** 视频直接铺在桌面图标**下方**，既不挡图标，
+也不影响右键菜单——桌面还是原来那个桌面，只是会动。
 
-> 已发布：<https://github.com/Gitsnod/WallDesk> —— 安装程序与绿色版见
-> [Releases](https://github.com/Gitsnod/WallDesk/releases)。
+用 C++ / Qt 写的原生程序，不注入 explorer、不挂钩子、不常驻浏览器内核。
 
-**当前版本：4.17.0**。按钮、下拉、复选框、滑块、菜单都有 Material 过渡动效；
-帧率与内存胶囊嵌在状态栏最右侧，鼠标悬停才展开诊断详情。
-
-1. **交互动效**：悬停叠 8% 主色、按压叠 10% 并让内容下沉 1px、触点 ripple 扩散 400ms；
-   下拉弹层展开淡入、复选框勾分两段描出、滑块 handle 悬停放大。时长与曲线取
-   Material Design 3 的 motion token，系统「关闭动画效果」时全部瞬时完成。
-2. **状态胶囊**：实时帧率与内存占用嵌进状态栏，配色跟随主题；悬停 200ms 在上方弹出
-   详情（解码档位、下发参数、媒体分辨率、缩略图缓存、内存峰值、运行时长），移开即收起。
-   它原先浮在内容右下角，会盖住列表末行与滚动条。
-3. **一致性**：按钮 / 下拉 / 输入框统一到 30px 级高度，单选按钮改 M3 样式与复选框统一，
-   设置子导航与主导航拉开层级；同时修掉主按钮禁用态、单选按钮选中态被画成直角方块的问题。
-
-各版本的功能亮点与修复明细统一收录在 [CHANGELOG.md](CHANGELOG.md)，本节只展开当前版本。
+**[⬇ 下载最新版](https://github.com/Gitsnod/WallDesk/releases/latest)**
 
 ---
 
-## 一、需要安装什么（环境清单）
+## 目录
 
-**必需的 5 项**（编译用，使用的人什么都不用装）：
+- [它能做什么](#它能做什么)
+- [下载与安装](#下载与安装)
+- [第一次用](#第一次用)
+- [功能](#功能)
+- [命令行参数](#命令行参数)
+- [数据存在哪](#数据存在哪)
+- [常见问题](#常见问题)
+- [开发与参与](#开发与参与)
+- [许可证](#许可证)
 
-| # | 软件 | 版本要求 | 用途 |
-|---|------|----------|------|
-| 1 | Qt Online Installer（开源版） | Qt 6.5 或 6.8 LTS，勾选 **Widgets** 模块 | GUI 框架 |
-| 2 | C++ 编译器（二选一） | MinGW 13.1.0 64-bit 或 MSVC 2022 | 编译 |
-| 3 | CMake | ≥ 3.21 | 构建系统 |
-| 4 | Ninja | 任意新版 | 构建后端 |
-| 5 | libVLC 运行时 | 3.0.x win64（不要 4.x） | 视频解码，内嵌打包用 |
+## 它能做什么
 
-**可选**：
+1. **视频壁纸挂在图标下面。** 多数同类工具是把视频窗口压在桌面最上层，图标会被遮住、
+   右键菜单也会失灵。WallDesk 把播放窗口挂进 Windows 的 `WorkerW` 图层，
+   位于图标之下、壁纸之上，桌面照常使用。
+2. **图片和视频混在一个库里管。** 搜索、按类型 / 收藏 / 分辨率过滤、排序、缩略图预览，
+   按 "下一张" 随机或顺序切换，也可以按时间段自动换。
+3. **默认就替笔记本省电。** 锁屏、全屏应用、电池供电、远程桌面时自动暂停，
+   退出这些状态自动续播，续播时回到原来那一帧。
 
-| 软件 | 用途 |
-|------|------|
-| Inno Setup 6 | 生成安装程序 `WallDesk-x.y.z-setup.exe` |
-| Git | 版本管理与上传 GitHub |
+## 下载与安装
 
-推荐路线 A（约 3 GB，不装 Visual Studio）：Qt 安装器里勾选
-`Qt 6.8.3 > MinGW 13.1.0 64-bit` + `Developer Tools > MinGW / CMake / Ninja`。
-Qt 套件与编译器必须同为 64 位，否则链接报 `LNK1112`。
+到 [Releases](https://github.com/Gitsnod/WallDesk/releases/latest) 下最新的两个文件之一：
 
-## 二、构建
+| 文件 | 适合谁 | 说明 |
+|------|--------|------|
+| `WallDesk-x.y.z-setup.exe` | 大多数人 | 安装到用户目录，**不需要管理员权限**；带桌面图标、开始菜单、可选开机自启、完整卸载 |
+| `WallDesk-x.y.z-win64.zip` | 想放 U 盘 / 不想装 | 解压即用，删目录即卸载；包里带 `SHA256SUMS.txt` 可核对完整性 |
 
-1. 修改 `build.bat` 顶部四个变量：`QT_DIR`、`MINGW_BIN`、`VLC_DIR`、`PYTHON`
-2. 双击 `build.bat`，产物 `build\WallDesk.exe`
-3. 打发布包：`build.bat release`（自动跑 windeployqt + 生成 zip + 校验清单）
+两个包都已内置 Qt 运行时与 VLC，**不需要另外安装任何东西**，体积约 25–60 MB。
 
-`build.bat` 会自动做三件事：检查并生成应用图标（`tools/make_icon.py`）、
-打包内嵌 VLC 运行时（`tools/pack_vlc.py`，装了 VLC 才生效）、配置编译部署。
-不打包 VLC 也能编译，视频功能回退到外部搜索（程序目录 / 注册表 / PATH）。
+### 系统要求
 
-## 三、运行与使用
+- Windows 10 / Windows 11，64 位
+- 桌面环境为正常的 explorer（第三方桌面美化工具可能抢占 `WorkerW` 图层，
+  此时程序会自动降级为置底窗口，壁纸能用但会盖住图标）
+- 视频解码依赖 GPU 或 CPU，4K 视频建议有硬件解码
 
-- 双击运行：主界面出现，添加图片 / 视频后点「应用选中」或双击画廊项
-- 命令行参数：
-  - `WallDesk.exe --minimized`：静默驻留托盘（开机自启用的就是它）
-  - `WallDesk.exe --next`：通知已运行的实例切换下一张
-  - `WallDesk.exe --quit`：通知已运行的实例退出
-  - `WallDesk.exe --portable`：本次强制便携模式
-  - `WallDesk.exe --verbose`：日志中记录调试信息
-- **单实例**：重复启动不会开第二个窗口，只会把已运行的窗口唤醒（或执行上面两条指令）
-- **设置页二级导航**：12 个分组按用途分成「壁纸 / 播放 / 场景 / 外观与效果 / 高级」五页，
-  左侧点选切换，不用再从一长列里滚着找；省电、便携、缓存、日志这类装完基本不再动的项集中在「高级」
-- **缩略图尺寸**：设置 → 高级 → 其它 → 缩略图尺寸（小 / 中 / 大 / 自适应）。窗口缩放只改变列数，
-  不再改变单元格尺寸（V4.5 起修掉了「拖窗口时缩略图忽大忽小」）
-- **视频缩略图**：默认开启，后台串行抓帧（同一时刻只有一个 libvlc 实例），
-  抓帧失败自动降级为占位图 + 播放角标；不想要可在「设置 → 高级 → 其它」里关掉
-- **多屏独立壁纸**：左侧「多屏」页为每台显示器单独指定图片壁纸（视频仍单实例播放，保持内存可控）
-- **画面效果**：设置 → 外观与效果 → 画面效果，实时调整亮度 / 对比度 / 饱和度 / 模糊 / 暗角 / 黑白
-- **桌面挂件 / 音乐可视化**：设置 → 外观与效果 → 桌面挂件 / 音乐可视化，开启后会在桌面顶层显示
-  时钟、日历、自定义文字或音频频谱条
-- **切换策略与定时场景**：设置 → 播放 → 切换策略（自动切换方式与范围）、
-  设置 → 场景 → 定时场景（按时段换壁纸）
-- **收藏与搜索**：壁纸库支持按文件名搜索、按全部 / 图片 / 视频 / 收藏 / 在线下载过滤，右键可收藏
-- **场景预设（V4.7）**：壁纸库页操作行的「场景预设」可直接应用；保存 / 删除在同行的「更多」菜单里，
-  设置页「场景」子页也有应用与保存入口，托盘右键同样可切换。
-  预设文件是数据目录下的 `presets.json`，可直接编辑或随配置一起拷走
-- **在线图源（V4.7）**：壁纸库页「更多 → 从网址下载…」粘贴图片网址（多个地址换行或逗号分隔），
-  「更多 → Bing 今日一图」抓取当日原图；下载落在数据目录的 `downloads/`
-- **重复下载不再堆副本**：同一张图再下一次会复用已有文件，不再产生 `xxx_1.jpg` 这类重复；
-  Bing 每日一图在请求前就能判断出「今天这张已经下过」，连这次流量都省掉
-- **下载文件可读命名**：Bing 图存成 `bing_2026-09-24_ElGolfo.jpg`，其它网址存成
-  `域名_原文件名.jpg`（路径里没有可用文件名时用 `域名_短哈希`），不再是 `wall_4c9e475ee60f5298.jpg`
-- **壁纸库页操作行**：添加 / 在线下载 / 停止 / 重新挂载 / 预设存取等低频动作收进「更多」菜单，
-  工具栏由四行收到两行，画廊多出一行缩略图
-- **按分辨率 / 朝向分组（V4.7）**：检索行的筛选器支持横向 / 纵向 / 方形与 SD…4K 五档，
-  排序可选「按分辨率」。悬停任意一项可看到尺寸与档位
-- **视频配频谱（V4.7）**：设置 → 播放 →「视频 → 音量」调到 0 以上，视频声音进入系统混音，
-  桌面频谱即随之跳动；音量 0 时完全不走音频链路（最省电）
-- **便携模式**：设置 → 高级 → 其它 分组里勾选，或在 exe 同目录放一个空的 `portable.ini`。
-  启用后配置与数据全部保存在程序目录的 `data\` 下，不写注册表，整个文件夹拷 U 盘带走
-- **日志**：`数据目录\logs\WallDesk.log`，超过 2 MB 自动滚动。设置 → 高级 → 其它 → 打开日志
+## 第一次用
 
-## 四、发布给其他用户（三种形态）
+1. 打开程序，点壁纸库上方的 **「更多 → 添加图片…」** 或 **「添加视频…」**，
+   也可以直接把文件拖进窗口
+2. 在画廊里选中一项，点 **「应用选中」**，或直接双击
+3. 关掉窗口程序仍在托盘运行，壁纸保持；
+   想在开机时自动恢复，到 **设置 → 播放 → 自动化** 勾选「开机自动启动」和「启动时恢复上次壁纸」
+4. 右键托盘图标可以切换、暂停、退出
 
-### 形态 1：绿色压缩包（最简单）
+## 功能
 
-```bat
-build.bat release
-```
+### 壁纸
 
-产物：`dist\WallDesk-4.17.0-win64.zip`（约 25–60 MB，取决于是否内嵌 VLC）。
-用户解压即运行，无需安装 Qt / VLC / 运行时库。包内含：
-
-- `WallDesk.exe` + Qt 运行时 DLL（windeployqt 部署）
-- `LICENSE` / `README.md` / `THIRD-PARTY-NOTICES.txt`
-- `BUILDINFO.txt`（版本、构建时间、主程序 SHA256）
-- `SHA256SUMS.txt`（全部文件校验，用户可核对完整性）
-
-### 形态 2：安装程序（给非技术用户）
-
-1. 先执行形态 1 生成 `dist\WallDesk-4.17.0-win64\` 目录
-2. 安装 [Inno Setup 6](https://jrsoftware.org/isdl.php)（免费，约 5 MB）
-3. 命令行执行 `iscc installer\WallDesk.iss`，或在 Inno 里打开该脚本按 F9
-
-产物：`dist\WallDesk-4.17.0-setup.exe`。安装到用户目录（无需管理员权限），
-提供桌面图标、开始菜单、可选开机自启、完整卸载。
-
-### 形态 3：单文件 exe（内嵌 VLC 时）
-
-只要 `build.bat` 第一步打包了 VLC 且 CMake 显示「内置 VLC 运行时：开」，
-`WallDesk.exe` 本身就是完整的——发给用户单个文件也能用（但 Qt DLL 仍需同目录，
-所以实际推荐形态 1 的压缩包）。单文件场景适合放进内部工具目录。
-
-### 分发前检查清单
-
-- [ ] 在**没装 Qt / VLC** 的干净机器（或虚拟机）上跑一遍发布包
-- [ ] 视频壁纸、图片壁纸、托盘、开机自启各测一次
-- [ ] 用 `SHA256SUMS.txt` 抽查一两个文件的校验值
-- [ ] 确认 LICENSE 与 THIRD-PARTY-NOTICES.txt 已随包（LGPL 合规要求）
-
-## 五、同步到 GitHub
-
-仓库地址：<https://github.com/Gitsnod/WallDesk>（已创建，无需再 `git init`）
-
-### 5.1 常规做法（能连通 github.com 的机器）
-
-```bash
-git add -A && git commit -m "说明本次改动"
-git push -u origin main                       # 首次需要 -u
-
-git tag -a v4.8.0 -m "WallDesk 4.8.0"
-git push origin v4.8.0
-```
-
-Release 可在网页上 **Releases → Draft a new release** 发起，也可用 GitHub CLI：
-
-```bash
-gh release create v4.17.0 dist/WallDesk-4.17.0-setup.exe dist/WallDesk-4.17.0-win64.zip \
-  --title "WallDesk 4.8.0" --notes-file tools/release-notes-v4.8.0.md
-```
-
-### 5.2 本开发机的网络现状与通道选择
-
-这台机器 **HTTPS 到 `github.com` 被拦截**，但拦的是**主机名**而非整台服务器——同一 IP 段
-（`20.205.243.x`）内 `api.github.com` 通、`github.com` 不通，与 DNS、IP 都无关：
-
-| 目标 | 实测 | 用途 |
+| 功能 | 位置 | 说明 |
 |------|------|------|
-| `github.com:443` | **不通**（HTTP 000；TCP 与 TLS 握手能建立，实际请求无响应） | 网页、`git push`、`gh` 设备码登录 |
-| `api.github.com` | 通（HTTP 200，0.5 s） | REST API、`gh` 绝大多数命令 |
-| `codeload.github.com` | 通（HTTP 200） | 下载仓库 tar / zip 归档 |
-| `objects.githubusercontent.com` | 通（根路径 HTTP 404 属正常） | Release 资产的实际下载源 |
-| `uploads.github.com` | 通（HTTP 302） | 上传 Release 资产 |
-| `ssh.github.com:22` 与 `:443` | 通（SSH 握手建立，`Permission denied (publickey)` 表示仅缺密钥） | 以 SSH 协议操作 git |
-| `www.microsoft.com` | **不通** | 说明不是只针对 GitHub，而是按域名放行的策略 |
+| 图片壁纸 | 壁纸库 | 六种填充方式：填充 / 适应 / 拉伸 / 平铺 / 居中 / 跨区（多屏） |
+| 视频壁纸 | 壁纸库 | H.264 最稳；HEVC / AV1 取决于显卡是否支持硬解 |
+| 多屏独立壁纸 | 左侧「多屏」页 | 每台显示器单独指定图片（视频仍单实例播放，控制内存） |
+| 场景预设 | 壁纸库操作行 | 把壁纸 + 画面效果 + 挂件 + 切换策略打包成命名场景，存 `presets.json`，可直接编辑或拷走 |
+| 定时场景 | 设置 → 场景 | 按时段自动换壁纸 |
 
-本机另装有终端安全管理代理（`NSecAgent`）；带代理、清空代理、绕过代理三种方式结果一致，
-沙箱内外也一致。**结论：这是本机网络策略层面的按域名拦截，不是 GitHub 故障，也不是 Git 配置问题。**
+### 桌面增强
 
-于是本机按下面顺序选通道。
+| 功能 | 位置 | 说明 |
+|------|------|------|
+| 画面效果 | 设置 → 外观与效果 | 亮度、对比度、饱和度、模糊、暗角、黑白，实时预览 |
+| 桌面挂件 | 设置 → 外观与效果 | 桌面顶层显示时钟、日历或自定义文字 |
+| 音乐可视化 | 设置 → 外观与效果 | WASAPI 回环采集音频，桌面显示频谱条；视频音量调到 0 时完全不碰音频链路（最省电） |
+| 主题 | 设置 → 外观与效果 | 浅色 / 深色 / 跟随系统 |
 
-**通道 1：SSH（最接近「直连」，不需要代理）**
+### 省电与自动化
 
-`github.com:22` 与 `ssh.github.com:443` 实测都能完成 SSH 握手，主机密钥指纹与 GitHub 官方
-`api.github.com/meta` 公布值逐项一致（RSA / ECDSA / ED25519 三型均核对通过）。本机目前
-**没有 `~/.ssh`**，先生成密钥并把公钥加到 GitHub 账号即可：
+| 功能 | 默认 | 说明 |
+|------|------|------|
+| 锁屏暂停 | 开 | 锁屏即停，解锁续播 |
+| 全屏应用暂停 | 开 | 检测到游戏 / 全屏视频时暂停，通常能省下大半电 |
+| 电池供电暂停 | 关 | 笔记本可开 |
+| 远程桌面暂停 | 开 | 远程连接时停掉，避免远端卡顿 |
+| 空闲暂停 | 关 | 无键鼠输入达设定分钟数（默认 5）即停，有输入半秒内续播 |
+| 逐应用规则 | 关 | 指定某个程序在前台时暂停壁纸，或反过来忽略全屏暂停（如让 OBS 录制时不停） |
+| 自动切换 | 关 | 按间隔顺序 / 随机切换，可限定范围 |
 
-```bash
-ssh-keygen -t ed25519 -C "你的邮箱"        # 本机尚无 ~/.ssh，先生成
-cat ~/.ssh/id_ed25519.pub                 # 内容贴到 GitHub → Settings → SSH and GPG keys
-ssh -T git@github.com                     # 出现 "Hi <用户名>!" 即通
-git remote set-url origin git@github.com:Gitsnod/WallDesk.git
-```
+所有暂停原因彼此独立，互不撤销：全屏结束了，电池暂停还在。
 
-22 端口被网络设备拦截时改走 443，在 `~/.ssh/config` 里写：
+### 组织与管理
 
-```
-Host github.com
-  HostName ssh.github.com
-  Port 443
-  User git
-```
+- **设置页**：12 个分组按用途分成「壁纸 / 播放 / 场景 / 外观与效果 / 高级」五页，左侧点选切换，
+  不用再从一长列里滚着找；省电、便携、缓存、日志这类装完基本不再动的项集中在「高级」
+- **检索**：按文件名搜索；按全部 / 图片 / 视频 / 收藏 / 在线下载过滤；按分辨率与朝向筛选；按添加时间或分辨率排序
+- **在线图源**：「更多 → 从网址下载…」支持多个网址一次导入；「更多 → Bing 今日一图」抓当日原图。
+  同一张图重复下载不会堆副本，文件按 `bing_2026-09-24_ElGolfo.jpg` 这种可读格式命名
+- **缩略图**：尺寸分小 / 中 / 大 / 自适应，窗口缩放只改列数不改格子大小；
+  视频缩略图默认开启，后台串行抓帧（同一时刻只有一个解码实例），失败自动降级为占位图
+- **悬停预览**：鼠标停在视频卡片上会动态预览（设置 → 高级 → 资源控制里可关）
+- **收藏**：右键收藏，过滤条可只看收藏
 
-**通道 2：HTTPS REST API（技能 `github-via-api` 与 `gh` 都走这里）**
+## 命令行参数
 
-`api.github.com` 通，因此不碰 `github.com` 也能完成绝大部分开发操作——推送提交、同步标签、
-发 Release、上传资产（走 `uploads.github.com`）：
+| 参数 | 作用 |
+|------|------|
+| `--minimized` | 静默驻留托盘（开机自启用的就是它） |
+| `--next` | 通知已运行的实例切换到下一张 |
+| `--quit` | 通知已运行的实例退出 |
+| `--portable` | 本次强制便携模式 |
+| `--verbose` | 日志记录调试信息 |
 
-```bash
-S="$HOME/.workbuddy/skills/github-via-api/scripts/github_via_api.py"
+重复启动不会开第二个窗口：新进程把命令转给已在运行的实例后自行退出。
+所以可以把「下一张」做成桌面快捷方式或 AutoHotkey 热键。
 
-python "$S" status                            # 看本地 / 远端差多少（只读）
-python "$S" push --dry-run                    # 演练：只列出待推送提交
-python "$S" push                              # 推送；结束后自动逐文件核对远端树
-python "$S" tags v4.17.0                       # 同步标签
-python "$S" release --tag v4.17.0 --title "WallDesk v4.17.0" \
-       --notes-file tools/release-notes-v4.17.0.md \
-       --asset dist/WallDesk-4.17.0-setup.exe \
-       --asset dist/WallDesk-4.17.0-win64.zip
-```
+## 数据存在哪
 
-令牌由脚本自动从 `git credential-manager get` 取。
-**不要用 `git credential fill`** —— 在 Git Bash 里它会挂住等交互输入。
+| | 位置 |
+|---|---|
+| 配置与数据（安装模式） | `%LOCALAPPDATA%\WallDesk` |
+| 配置与数据（便携模式） | `程序目录\data` |
+| 日志 | 上述数据目录下的 `logs\WallDesk.log`，超过 2 MB 自动滚动 |
+| 下载的在线图片 | 数据目录下的 `downloads\` |
 
-`gh` 已装在本机（`%LOCALAPPDATA%\Programs\GitHubCLI\bin\gh.exe`，用户级，未用管理员权限），
-令牌由 `~/.bashrc` 从 Windows 凭据管理器现取注入 `GH_TOKEN`，不落盘明文；
-`gh auth status` 显示 `Logged in to github.com account Gitsnod (GH_TOKEN)`。
-**`gh auth login` 的设备码流程走 `github.com/login/device`，在本机不通**，只能用 `GH_TOKEN`；
-现有令牌 scope 为 `gist, repo, workflow`，缺 `read:org`（补 scope 需到网页重新授权）。
+便携模式：设置 → 高级 → 其它 里勾选，或在 exe 同目录放一个空的 `portable.ini`。
+开启后不写注册表，整个文件夹拷到 U 盘就能带走。
 
-**通道 3：代理**
+## 常见问题
 
-拦截按目标主机名判定，因此**走代理可行**：域名留在加密隧道内，本机策略看不到目标主机名即可放行。
+| 现象 | 原因与处理 |
+|------|-----------|
+| 提示「未能加载 libvlc.dll」 | 用的是绿色版且包里少了文件，或自行编译时没打包 VLC。重新下完整包，或在界面里「定位 libvlc」手动指定 |
+| 提示「未能定位桌面 WorkerW 图层」 | 第三方桌面美化工具占用了该图层。重启 `explorer.exe` 后重试；程序会降级为置底窗口，壁纸能显示但会盖住图标 |
+| 视频黑屏但显示「已应用」 | 编码不受支持（HEVC / AV1 需要硬件解码）。到设置 → 播放 → 解码档位换一档，或换成 H.264 视频 |
+| 休眠唤醒后视频不见了 | 已自动处理：监听电源广播自动重挂续播，另有看门狗兜底。若仍出现，到日志里找 `视频宿主窗口` 一行 |
+| 资源管理器重启后失效 | 看门狗每 2–8 秒校验一次，异常会自动重挂 |
+| 启动没反应 | 程序是单实例的，可能已经在托盘里了。点托盘图标或再启动一次会唤醒窗口 |
+| 笔记本耗电变快 | 视频壁纸本身耗电，属物理规律。确认「锁屏暂停」「全屏暂停」已开，电池场景可再开「电池暂停」 |
+| 想彻底卸载 | 安装版用系统「应用和功能」；绿色版删目录，再顺手清掉 `%LOCALAPPDATA%\WallDesk` |
 
-```bash
-export HTTPS_PROXY=http://127.0.0.1:端口                # 对 curl / git / gh 同时生效
-git config --global http.proxy http://127.0.0.1:端口    # 只对 git 生效
-```
+遇到没列出的问题，带上 `logs\WallDesk.log` 到
+[Issues](https://github.com/Gitsnod/WallDesk/issues) 反馈——日志首行就有系统与 Qt 版本。
 
-`gh` 与 `git` 均遵循 `HTTPS_PROXY`（已实测：把该变量指向一个空端口，`gh api` 立刻报
-`proxyconnect tcp ... refused`，证明变量确实被采用）。两点注意：
+## 开发与参与
 
-- 本机**当前没有安装任何代理客户端**（WinINET 系统代理为关闭、常见代理端口无监听、
-  无 Clash / v2ray 一类进程），要用代理需先自行部署一个可用的代理服务；
-- 有了通道 1，代理对 git 操作已非必需，只在需要访问网页版 GitHub
-  （看 Issue、网页发 Release、`gh auth login` 设备码）时才有必要。
+想改代码、自己编译或发版，看 **[docs/DEVELOPER.md](docs/DEVELOPER.md)**：
+环境清单、构建、调试、打包三种形态、GitHub 同步通道、目录结构与设计要点都在那里。
 
-### 推树通道的三条要点
+一句话版本：装 Qt 6.x + MinGW 64 位 + CMake + Ninja，改 `build.bat` 顶部四个变量，
+双击即编译；改完源码先跑 `python tools/check_sources.py`。
 
-- **推树必须全量**，绝不能传 `base_tree`。曾以「远端父提交的树」为 base、再叠加本地
-  `diff-tree` 的清单，两者语义不匹配，结果把远端 `main` 推成只剩 6 个条目（事故级）。
-- Git Data API 重放出的提交 **SHA 与本地不同，但 tree SHA 完全相同**。工具据此反查
-  「远端 HEAD 相当于哪个本地提交」，不必手工维护映射表。
-- **推完必须逐文件核对**（`push` 已自动执行，报 MISSING / DIFF / MODE / EXTRA 四类问题），
-  不通过就不要继续打标签、发 Release。
+变更记录统一在 [CHANGELOG.md](CHANGELOG.md)（Keep a Changelog 格式）。
 
-### 注意事项
+## 许可证
 
-- **`src\VlcBundle.bin` 不要提交**：几十 MB 的打包产物，已在 .gitignore 排除；
-  其他开发者克隆后自己运行 `tools\pack_vlc.py` 生成
-- 仓库是 **Public**（MIT 许可，无敏感信息）
-- 提交前 `git status` 过一眼，确认没有混入壁纸文件、私人路径
-
-## 六、已知限制与排查
-
-| 现象 | 原因 / V4 的处理方式 |
-|------|----------------------|
-| 「未能加载 libvlc.dll」 | 未内嵌且外部搜索失败；用界面「定位 libvlc」手动指定，或改用内嵌构建 |
-| 「未能定位桌面 WorkerW 图层」 | 第三方桌面美化工具占用；重启 `explorer.exe`；失败时自动降级为顶层置底窗口 |
-| 视频黑屏但状态显示已应用 | 编码不受支持（HEVC/AV1 需硬件解码）；切「软件解码」档位或换 H.264 测试 |
-| 编译报 `LNK1112` | Qt 套件与编译器位数不一致，换 64 位套件 |
-| 打包报 `Unable to query qtpaths: Error running binary qtpaths: pipe:` | 本机 `windeployqt` 拉不起子进程 `qtpaths`（环境层问题——`qtpaths --query QT_INSTALL_PREFIX` 单独运行正常，换 POSIX/Windows 两种 PATH、带不带 PATH、沙箱内外都一样）。改用 `python tools\make_release.py --deploy-from build`：从构建目录里已有的那份 Qt 部署直接拷贝运行时 |
-| 休眠唤醒后视频消失 | 已自动处理：监听电源广播自动重挂续播，另有看门狗兜底 |
-| 资源管理器重启后失效 | 看门狗每 2–8 秒校验，异常自动重挂 |
-| 用户说「装了打不开」 | 让其打开 `数据目录\logs\WallDesk.log`，首行即有系统与 Qt 版本 |
-| 视频壁纸耗电 | 物理规律；默认已启用「锁屏暂停」「全屏暂停」，笔记本可再开「电池暂停」 |
-
-数据目录：安装模式 `%LOCALAPPDATA%\WallDesk`；便携模式 `程序目录\data`。
-
-## 七、目录结构
-
-```
-WallpaperDesk/
-├── CMakeLists.txt          构建配置（自动识别 Qt5/Qt6，注入版本与图标资源）
-├── build.bat               一键构建；加 release 参数打发布包
-├── README.md
-├── CHANGELOG.md             变更日志（Keep a Changelog 格式，按版本与变更类型分组）
-├── LICENSE                 MIT（WallDesk 自身代码）
-├── THIRD-PARTY-NOTICES.txt Qt / libVLC 的 LGPL 声明（分发必须携带）
-├── .gitignore / .gitattributes
-├── installer/
-│   └── WallDesk.iss        Inno Setup 安装程序脚本
-├── resources/
-│   └── app.ico             应用图标（tools/make_icon.py 生成，已提交）
-├── tools/
-│   ├── make_icon.py        生成应用图标（纯标准库）
-│   ├── pack_vlc.py         裁剪并打包 VLC 运行时为内嵌归档
-│   ├── make_release.py     发布打包（windeployqt + 校验 + zip）
-│   ├── check_sources.py    静态自检（改源码后必跑）
-│   ├── upload_release_assets.py  批量上传发布资产到 GitHub Release
-│   ├── verify_video.py     视频壁纸可见性验证（帧差法，无需人眼）
-│   └── test_loop.py / test_switch.py  长循环与图/视切换回归测试
-└── src/
-    ├── main.cpp            入口：命令行、路径、日志、单实例
-    ├── MainWindow.{h,cpp}  主界面、画廊、托盘、配置持久化
-    ├── WallpaperEngine.{h,cpp}  壁纸生效（注册表 / WorkerW 挂载 / 看门狗）
-    ├── VlcPlayer.{h,cpp}   libVLC 动态加载与播放控制
-    ├── VlcBundle.{h,cpp}   内嵌 VLC 运行时的解包与缓存
-    ├── AppPaths.{h,cpp}    便携模式与数据目录管理
-    ├── Logger.{h,cpp}      日志（文件滚动、环境信息）
-    ├── SingleInstance.{h,cpp}  单实例协作（QLocalServer）
-    ├── DesktopWatcher.{h,cpp}  系统事件（休眠/锁屏/显示器/电源）
-    ├── FullscreenGuard.{h,cpp} 全屏应用检测
-    ├── ThumbnailLoader.{h,cpp} 异步缩略图与磁盘缓存
-    ├── AppTheme.{h,cpp}    浅色/深色/跟随系统主题
-    ├── ImageEffects.{h,cpp} 图片画面效果（亮度 / 对比度 / 饱和度 / 模糊 / 暗角 / 灰度）
-    ├── DesktopOverlay.{h,cpp} 透明桌面挂件层（时钟 / 日历 / 文字）
-    ├── AudioSpectrum.{h,cpp} WASAPI 回环采集 + FFT 频谱绘制
-    ├── PresetManager.{h,cpp} 场景预设的 JSON 读写（V4.7）
-    ├── OnlineSources.{h,cpp} 在线图源：URL 导入 + Bing 每日一图（V4.7）
-    ├── MediaInfo.{h,cpp} 分辨率 / 朝向探测，带缓存（V4.7）
-    └── app.rc.in           版本与图标资源模板（CMake 生成）
-```
-
-## 八、设计要点
-
-- **图片壁纸**：写注册表 `WallpaperStyle`/`TileWallpaper` → `SystemParametersInfoW(SPI_SETDESKWALLPAPER)`，
-  六种填充模式；参数未变时跳过写入与广播
-- **视频壁纸**：向 `Progman` 发 `0x052C` 拿 `WorkerW` 图层，宿主 `SetParent` 进去置底；
-  失败自动降级（WorkerW → Progman 子窗口 → 独立置底顶层窗口）
-- **libVLC 动态加载**：`LoadLibrary` + `GetProcAddress`，不链接 .lib；MSVC/MinGW 均可编，
-  缺 VLC 时程序照常启动（视频功能禁用）
-- **内嵌运行时**：`pack_vlc.py` 把 VLC 裁剪压缩成归档，经 Windows RCDATA 资源链进 exe；
-  首次启动解包到数据目录（临时目录 + 原子替换 + .ok 标记），后台线程执行不假死
-- **看护与恢复**：电源广播/锁屏/显示器变更监听 + 自适应看门狗；重挂前记录播放位置续播
-- **省电**：锁屏、电池、全屏应用、远程会话、逐应用规则、空闲（无键鼠输入）多种策略暂停，与用户手动暂停语义分开，互不干扰
-
-## 九、版本历史
-
-当前版本 **4.17.0**（2026-10-22 发布）。完整的变更记录见仓库根目录的
-[CHANGELOG.md](CHANGELOG.md)：每个版本独立一节、按变更类型（新增 / 变更 / 弃用 / 移除 /
-修复 / 安全）分组、并标注发布日期。
-
-格式遵循 [Keep a Changelog 1.0.0](https://keepachangelog.com/zh-CN/1.0.0/)，
-版本号遵循[语义化版本 2.0.0](https://semver.org/lang/zh-CN/spec/v2.0.0.html)。
-
-已发布版本：4.0.0 → 4.1.0 → 4.2.0 → 4.2.1 → 4.3.0 → 4.4.0 → 4.5.0 → 4.6.0 → 4.6.1 →
-4.7.0 → 4.8.0 → 4.9.0 → 4.10.0 → 4.11.0 → 4.11.1 → 4.12.0 → 4.13.0 → 4.14.0 → 4.15.0 → 4.16.0 → 4.17.0，各自的安装包与绿色版见
-[Releases](https://github.com/Gitsnod/WallDesk/releases)。
-
-V1–V3 是 4.0.0 之前、公开发布前的开发里程碑，未按语义化版本编号，也没有留存发行产物，
-已在 CHANGELOG.md 末尾单独说明。
+WallDesk 自身代码为 [MIT](LICENSE)。使用的 Qt 与 libVLC 为 LGPL，
+分发时随包携带 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt)。

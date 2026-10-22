@@ -221,6 +221,9 @@ bool VlcPlayer::bindAll()
     ok &= bind(libvlc_video_take_snapshot_, "libvlc_video_take_snapshot");
     // 帧率查询：仅状态展示用，老版本缺失时降级为 0，不影响播放
     bind(libvlc_media_player_get_fps_, "libvlc_media_player_get_fps");
+    // 可选绑定：状态栏要显示视频分辨率，而 MediaInfoProbe 只认图片。
+    bind(libvlc_video_get_width_, "libvlc_video_get_width");
+    bind(libvlc_video_get_height_, "libvlc_video_get_height");
     // 画面效果接口：老版本 libVLC 没有它，缺失时静默降级（仅图片效果可用）
     bind(libvlc_video_set_adjust_float_, "libvlc_video_set_adjust_float");
     return ok;
@@ -474,7 +477,21 @@ double VlcPlayer::fps() const
     if (!m_player || !libvlc_media_player_get_fps_) {
         return 0.0;
     }
-    return libvlc_media_player_get_fps_(m_player);
+    // 返回 float（见 VlcPlayer.h 的 typedef 注释），必须按 float 收再提升。
+    return static_cast<double>(libvlc_media_player_get_fps_(m_player));
+}
+
+QSize VlcPlayer::videoSize() const
+{
+    if (!m_player || !libvlc_video_get_width_ || !libvlc_video_get_height_) {
+        return {};
+    }
+    const int w = libvlc_video_get_width_(m_player);
+    const int h = libvlc_video_get_height_(m_player);
+    if (w <= 0 || h <= 0) {
+        return {};
+    }
+    return QSize(w, h);
 }
 
 bool VlcPlayer::takeSnapshot(const QString& file, const QString& outPng, int width, int height)

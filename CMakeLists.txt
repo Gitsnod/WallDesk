@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(WallDesk VERSION 4.17.0 LANGUAGES CXX)
+project(WallDesk VERSION 4.18.0 LANGUAGES CXX)
 
 option(WALLDESK_DEPLOY_QT "构建后自动运行 windeployqt 部署 Qt 运行时" OFF)
 
@@ -43,6 +43,7 @@ set(PROJECT_SOURCES
     src/ui/AnimatedSlider.cpp
     src/ui/MenuFade.cpp
     src/ui/FadeOverlay.cpp
+    src/ui/Chevron.cpp
     src/MainWindow.h
     src/WallpaperEngine.h
     src/VlcPlayer.h
@@ -67,6 +68,7 @@ set(PROJECT_SOURCES
     src/ui/AnimatedSlider.h
     src/ui/MenuFade.h
     src/ui/FadeOverlay.h
+    src/ui/Chevron.h
 )
 
 # 内嵌 VLC 运行时：由 tools/pack_vlc.py 生成，缺失时自动降级为外部搜索

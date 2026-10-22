@@ -135,7 +135,10 @@ QComboBox QAbstractItemView {
     selection-color: {text};
     padding: 4px;
 }
-QComboBox::drop-down { border: none; width: 18px; }
+/* 右侧 26px 是箭头区：QSS 给不出箭头图像，AnimatedComboBox 在该区域内自绘
+   chevron（见 src/ui/Chevron.cpp）。宽度必须与 AnimatedComboBox::paintEvent
+   里的 arrowZone 一致，否则箭头会压住文字。 */
+QComboBox::drop-down { border: none; width: 26px; }
 QSpinBox::up-button, QSpinBox::down-button {
     width: 16px; height: 12px; border: none; background: transparent;
 }
@@ -223,12 +226,9 @@ QStatusBar { background: {window}; color: {subText}; border-top: 1px solid {bord
 QStatusBar::item { border: none; }
 QStatusBar QLabel { padding: 0 4px; }
 
-/* ---- 底部状态胶囊（V4.17：嵌入状态栏最右侧，悬浮出详情浮层） ---- */
+/* ---- 底部状态胶囊（V4.17 嵌入状态栏；V4.18 起只承载单行信息，不再有 hover 态） ---- */
 QFrame#statusCapsule { background: {card}; border: 1px solid {border}; border-radius: 9px; }
-QFrame#statusCapsule:hover { border-color: {accent}; }
 QFrame#statusCapsule QLabel { color: {subText}; font-size: 11px; padding: 0; }
-QFrame#capsuleDetail { background: {card}; border: 1px solid {border}; border-radius: 10px; }
-QFrame#capsuleDetail QLabel { color: {text}; font-size: 11px; padding: 0; }
 
 /* ---- 左侧导航栏 ---- */
 QListWidget#navRail {
@@ -370,6 +370,16 @@ QColor AppTheme::buttonBorderColor(ThemeKind kind)
 QColor AppTheme::accentSoftColor(ThemeKind kind)
 {
     return QColor(QString::fromLatin1(paletteFor(resolve(kind)).accentSoft));
+}
+
+QColor AppTheme::textColor(ThemeKind kind)
+{
+    return QColor(QString::fromLatin1(paletteFor(resolve(kind)).text));
+}
+
+QColor AppTheme::subTextColor(ThemeKind kind)
+{
+    return QColor(QString::fromLatin1(paletteFor(resolve(kind)).subText));
 }
 
 QString AppTheme::styleSheet(ThemeKind kind)

@@ -10,6 +10,43 @@
 
 <!-- 新条目先写在这里；发布时把本节内容整体移入新的版本区块，并补上发布日期。 -->
 
+## [4.18.0] - 2026-10-22
+
+### 新增（Added）
+
+- **状态栏常驻性能信息**：帧率、进程 CPU、内存三项与分辨率并排放在状态栏最右侧，
+  每 2 秒刷新。CPU 用 `GetProcessTimes` 差分 ÷ 墙钟 ÷ 逻辑核数，口径与任务管理器一致
+  （占整机，不是占单核）。原来这些数藏在悬浮详情里，要停 200ms 才弹、移开就收，
+  实测没人用。
+- **`src/ui/Chevron`**：下拉框与菜单按钮共用的自绘箭头。QSS 只能给 `::drop-down` 宽度、
+  给不出箭头图像，两个控件各自画一份会粗细角度不一致，收到一处。
+- **`docs/DEVELOPER.md`**：环境清单、构建、调试、打包、发版通道、排错、目录结构、
+  设计要点单独成文。README 改为面向使用者。
+
+### 变更（Changed）
+
+- **README 按读者拆分**：README.md 只留「是什么 / 下载安装 / 第一次用 / 功能 /
+  参数 / 数据位置 / 常见问题」，开发者内容全部移到 `docs/DEVELOPER.md` 并在 README 留入口。
+  原文 351 行拆成两份，逐节标注去向，专有名词 grep 复核无遗漏。
+- **状态胶囊去掉详情浮层**：`m_capsuleDetail`、200ms 悬浮计时器、`eventFilter` 里的
+  Enter/Leave 分支一并删除。完整参数（解码档位、下发参数、缓存占用、内存峰值、运行时长）
+  改由标准悬停提示承载。
+- **下拉框箭头区从 18px 放宽到 26px**，与自绘箭头的位置对齐。
+
+### 修复（Fixed）
+
+- **帧率长期显示为 0**：`libvlc_media_player_get_fps` 返回 `float`，函数指针却声明成
+  `double`，低 32 位的 float 位模式被当 double 读，得到约 1e-314 的值，调用方一律判为 0。
+  改为 `float` 接收后实测 4K@24fps 视频显示 `24.0 fps`。
+- **视频壁纸分辨率显示「—」**：`MediaInfoProbe` 走 `QImageReader`，只认图片，对视频恒返回
+  无效。视频改问 `libvlc_video_get_width/height`，图片仍走原路径。
+- **下拉框看起来不像下拉框**：右侧 `::down-arrow` 从未定义，18px 宽的箭头区是空白，
+  整个控件看着就是个输入框。改为自绘 chevron，悬停时转主色。
+- **「更多」看不出是菜单**：`AnimatedPushButton` 全自绘背景后，Qt 的 `menu-indicator`
+  不再绘制，按钮只剩文字。在 sizeHint 已预留的右侧空间里补画 chevron。
+- **状态栏文案「— — fps」**：分辨率与帧率各写一个占位符会拼成两个破折号，
+  改为合并成一个「播放」字段，两者都拿不到时显示单个「—」。
+
 ## [4.17.0] - 2026-10-22
 
 ### 新增（Added）
@@ -390,7 +427,8 @@
 另有一份 `4.0.1` 的本地构建产物（`dist/WallDesk-4.0.1-win64`），**未打标签、未发布 Release，
 也没有对应的变更记录**，因此不单列版本条目。
 
-[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.17.0...HEAD
+[未发布]: https://github.com/Gitsnod/WallDesk/compare/v4.18.0...HEAD
+[4.18.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.18.0
 [4.17.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.17.0
 [4.16.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.16.0
 [4.15.0]: https://github.com/Gitsnod/WallDesk/releases/tag/v4.15.0

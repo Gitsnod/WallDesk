@@ -2,6 +2,7 @@
 
 #include "ImageEffects.h"
 
+#include <QSize>
 #include <QString>
 #include <QStringList>
 #include <QtGlobal>
@@ -113,6 +114,10 @@ public:
     /** 实时帧率（libVLC 报的值）；不可用或未播放返回 0（V4.11 状态胶囊用）。 */
     double fps() const;
 
+    /** 当前视频帧尺寸；未播放、或 libVLC 尚未解析出轨返回无效值。
+     *  MediaInfoProbe 只认图片（走 QImageReader），视频尺寸只能从这里取。 */
+    QSize videoSize() const;
+
     /**
      * 离线抓帧：用独立实例把视频某一帧存成 png，用于生成缩略图。
      * 与主播放实例互不干扰；任何一步超时或失败都返回 false，调用方降级即可。
@@ -174,7 +179,11 @@ private:
     typedef qint64 (*PfnPlayerGetTime)(void* player);
     typedef void  (*PfnPlayerSetTime)(void* player, qint64 time);
     typedef qint64 (*PfnPlayerGetLength)(void* player);
-    typedef double (*PfnPlayerGetFps)(void* player);
+    // libvlc_media_player_get_fps 的返回值是 float，不是 double。按 double 读会把
+    // 低 32 位的 float 位模式当成 double 的低半部分，得到一个约 1e-314 的数，
+    // 在调用方被当成 0 —— 状态栏帧率长期显示「—」正是这个原因（V4.18 修正）。
+    typedef float (*PfnPlayerGetFps)(void* player);
+    typedef int   (*PfnVideoGetSize)(void* player);
     typedef int   (*PfnVideoTakeSnapshot)(void* player, unsigned num, const char* path,
                                           unsigned width, unsigned height);
     typedef void  (*PfnVideoSetAdjustFloat)(void* player, unsigned option, float value);
@@ -200,6 +209,8 @@ private:
     PfnPlayerSetTime   libvlc_media_player_set_time_ = nullptr;
     PfnPlayerGetLength libvlc_media_player_get_length_ = nullptr;
     PfnPlayerGetFps    libvlc_media_player_get_fps_ = nullptr;
+    PfnVideoGetSize    libvlc_video_get_width_ = nullptr;
+    PfnVideoGetSize    libvlc_video_get_height_ = nullptr;
     PfnVideoTakeSnapshot libvlc_video_take_snapshot_ = nullptr;
     PfnVideoSetAdjustFloat libvlc_video_set_adjust_float_ = nullptr;
 

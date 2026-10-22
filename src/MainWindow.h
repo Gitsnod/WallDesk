@@ -453,22 +453,22 @@ private:
      *  用 effect 而不是改 geometry，避免牵动布局把邻居挤动。 */
     void fadeInWidget(QWidget* w, int ms);
 
-    // ---- V4.11：底部状态胶囊（V4.17 起嵌入状态栏，悬浮出详情浮层） ----
+    // ---- V4.11：底部状态胶囊（V4.17 嵌入状态栏；V4.18 起只留单行简略信息） ----
     void buildStatusCapsule(QWidget* parent);
     void refreshStatusCapsule();
-    void showCapsuleDetail();   // 鼠标悬浮：在胶囊上方弹出详情浮层
-    void hideCapsuleDetail();   // 移走：收起
+    /** 进程 CPU 占用（%），口径同任务管理器：占整机，不是占单核。 */
+    double sampleProcessCpu();
     QFrame* m_capsule = nullptr;          // 状态栏里的单行胶囊
-    QFrame* m_capsuleDetail = nullptr;    // 详情浮层（独立 ToolTip 窗口，不挤布局）
     QFrame* m_dropHint = nullptr;   // 拖拽投放高亮层
     bool acceptDropUrls(const QMimeData* mime) const;
     void updateDropHint(bool visible);
     QLabel* m_capsuleLabel = nullptr;
-    QLabel* m_capsuleDetailLabel = nullptr;
     QTimer* m_capsuleTimer = nullptr;
-    QTimer* m_capsuleHoverTimer = nullptr; // 悬浮稳定 200ms 才弹，避免扫过就闪
-    QString m_capsuleCacheText;   // 悬浮时算一次的缓存统计
     QDateTime m_startedAt = QDateTime::currentDateTime();
+    // CPU 采样基准（两次差分：进程 CPU 时间增量 ÷ 墙钟增量 ÷ 逻辑核数）
+    quint64 m_cpuLastProc100ns = 0;
+    qint64 m_cpuLastWallMs = 0;
+    double m_cpuPercent = 0.0;
 
     bool m_backendReady = false;
     ThemeKind m_theme = ThemeKind::System;

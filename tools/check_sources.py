@@ -43,6 +43,7 @@ FILES = [
     "ui/AnimatedSlider.h", "ui/AnimatedSlider.cpp",
     "ui/MenuFade.h", "ui/MenuFade.cpp",
     "ui/FadeOverlay.h", "ui/FadeOverlay.cpp",
+    "ui/Chevron.h", "ui/Chevron.cpp",
 ]
 
 # 声明/定义配对

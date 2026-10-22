@@ -1,5 +1,6 @@
 #include "AnimatedComboBox.h"
 #include "../AppTheme.h"
+#include "Chevron.h"
 #include "MotionTokens.h"
 
 #include <QAbstractAnimation>
@@ -115,12 +116,25 @@ void AnimatedComboBox::hidePopup()
 void AnimatedComboBox::paintEvent(QPaintEvent* event)
 {
     QComboBox::paintEvent(event);
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    // 下拉箭头：QSS 只能给 ::drop-down 宽度，给不出图像，右侧原本是空白，
+    // 整个控件看着就是个输入框。这里自绘 chevron，位置与 QSS 的 26px 区对齐。
+    const qreal arrowZone = 26.0;
+    const QRectF arrowBox(width() - arrowZone, 0.0, arrowZone, height());
+    QColor arrowColor = isEnabled() ? AppTheme::subTextColor(AppTheme::current())
+                                    : QColor(148, 163, 184);
+    if (isEnabled() && underMouse()) {
+        arrowColor = QColor(AppTheme::accentColor(AppTheme::current()));
+    }
+    Chevron::drawDown(p, arrowBox, arrowColor);
+
     if (!isEnabled() || !hasFocus()) {
         return;
     }
     // 焦点环（QSS 无 outline，自绘 2px accent 50%）
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
     QColor ring = QColor(AppTheme::accentColor(AppTheme::current()));
     ring.setAlphaF(0.5);
     p.setPen(QPen(ring, 2.0));

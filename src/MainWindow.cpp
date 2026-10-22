@@ -2344,16 +2344,6 @@ void MainWindow::onResolutionFilterChanged()
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
-    // 状态胶囊：悬浮停住 200ms 弹详情，移走立即收起（QFrame 没有 hovered 信号）
-    if (m_capsule && watched == m_capsule) {
-        if (event->type() == QEvent::Enter) {
-            if (m_capsuleHoverTimer) {
-                m_capsuleHoverTimer->start();
-            }
-        } else if (event->type() == QEvent::Leave) {
-            hideCapsuleDetail();
-        }
-    }
     if (m_list && watched == m_list->viewport()) {
         switch (event->type()) {
         case QEvent::MouseMove:
@@ -2688,6 +2678,8 @@ void MainWindow::buildStatusCapsule(QWidget* parent)
     // V4.17：从「浮在内容右下角」改为「嵌进状态栏最右侧」。
     // 原来用绝对定位压在 centralWidget 上，会盖住列表最后一行和滚动条，
     // 且深色底在浅色主题里像贴上去的一块补丁。放进状态栏后由 QSS 跟主题走。
+    // V4.18：去掉悬浮详情浮层——要停 200ms 才弹、移开就收，实际用不上；
+    // 把真正会看的四个数（分辨率 / 帧率 / CPU / 内存）全压进这一行。
     m_capsule = new QFrame(parent);
     m_capsule->setObjectName(QStringLiteral("statusCapsule"));
     m_capsule->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
@@ -2697,27 +2689,7 @@ void MainWindow::buildStatusCapsule(QWidget* parent)
     m_capsuleLabel = new QLabel(m_capsule);
     m_capsuleLabel->setTextFormat(Qt::PlainText);
     lay->addWidget(m_capsuleLabel);
-    m_capsule->installEventFilter(this);
     statusBar()->addPermanentWidget(m_capsule, 0);
-
-    // 详情浮层：独立 ToolTip 窗口。不用「把胶囊撑成多行」是因为状态栏一变高，
-    // 整个页面会被顶上去，鼠标一进一出就抖；浮层只覆盖在页面之上，布局零影响。
-    m_capsuleDetail = new QFrame(nullptr, Qt::ToolTip | Qt::FramelessWindowHint);
-    m_capsuleDetail->setObjectName(QStringLiteral("capsuleDetail"));
-    m_capsuleDetail->setAttribute(Qt::WA_ShowWithoutActivating, true);
-    m_capsuleDetail->setAttribute(Qt::WA_TranslucentBackground, true); // 圆角外透明
-    auto* detailLayout = new QVBoxLayout(m_capsuleDetail);
-    detailLayout->setContentsMargins(12, 9, 14, 10);
-    detailLayout->setSpacing(0);
-    m_capsuleDetailLabel = new QLabel(m_capsuleDetail);
-    m_capsuleDetailLabel->setTextFormat(Qt::PlainText);
-    detailLayout->addWidget(m_capsuleDetailLabel);
-    m_capsuleDetail->hide();
-
-    m_capsuleHoverTimer = new QTimer(this);
-    m_capsuleHoverTimer->setSingleShot(true);
-    m_capsuleHoverTimer->setInterval(200); // 扫过不弹，停住才弹
-    connect(m_capsuleHoverTimer, &QTimer::timeout, this, &MainWindow::showCapsuleDetail);
 
     // 拖拽投放高亮：整块半透明蓝框 + 提示文字，拖拽期间才显示
     m_dropHint = new QFrame(parent);
@@ -2741,51 +2713,40 @@ void MainWindow::buildStatusCapsule(QWidget* parent)
     refreshStatusCapsule();
 }
 
-void MainWindow::showCapsuleDetail()
+double MainWindow::sampleProcessCpu()
 {
-    if (!m_capsule || !m_capsuleDetail) {
-        return;
+    // GetProcessTimes 给的是进程累计的「内核 + 用户」时间（100ns 单位）。
+    // 两次采样的增量 ÷ 墙钟增量 = 占单核百分比；再除逻辑核数才是占整机，
+    // 与任务管理器显示的口径一致（VLC 解码这类多线程负载才不会超过 100%）。
+    FILETIME createTime{};
+    FILETIME exitTime{};
+    FILETIME kernelTime{};
+    FILETIME userTime{};
+    if (!GetProcessTimes(GetCurrentProcess(), &createTime, &exitTime,
+                         &kernelTime, &userTime)) {
+        return m_cpuPercent;
     }
-    // 缓存统计要遍历目录，只在真正展示时算一次；窗口小时把行数压掉也不能算漏
-    const QDir dir(ThumbnailLoader::cacheDir());
-    const QFileInfoList files = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
-    qint64 bytes = 0;
-    for (const QFileInfo& fi : files) {
-        bytes += fi.size();
-    }
-    m_capsuleCacheText = QStringLiteral("缩略图缓存：%1 个 / %2 MB")
-                             .arg(files.size())
-                             .arg(QString::number(bytes / 1048576.0, 'f', 1));
-    refreshStatusCapsule();
+    ULARGE_INTEGER k{};
+    ULARGE_INTEGER u{};
+    k.LowPart = kernelTime.dwLowDateTime;
+    k.HighPart = kernelTime.dwHighDateTime;
+    u.LowPart = userTime.dwLowDateTime;
+    u.HighPart = userTime.dwHighDateTime;
+    const quint64 proc100ns = k.QuadPart + u.QuadPart;
+    const qint64 wallMs = QDateTime::currentMSecsSinceEpoch();
 
-    m_capsuleDetail->adjustSize();
-    const int width = qMax(m_capsuleDetail->width(), m_capsule->width());
-    m_capsuleDetail->resize(width, m_capsuleDetail->height());
-
-    const QPoint anchor = m_capsule->mapToGlobal(QPoint(0, 0));
-    QRect avail(0, 0, 1280, 800);
-    if (const QScreen* scr = QGuiApplication::screenAt(anchor)) {
-        avail = scr->availableGeometry();
+    if (m_cpuLastWallMs > 0 && wallMs > m_cpuLastWallMs && proc100ns >= m_cpuLastProc100ns) {
+        const double procMs = double(proc100ns - m_cpuLastProc100ns) / 10000.0;
+        const double wallDelta = double(wallMs - m_cpuLastWallMs);
+        const int cores = qMax(1, QThread::idealThreadCount());
+        if (wallDelta > 0.0) {
+            m_cpuPercent = 100.0 * procMs / wallDelta / cores;
+            m_cpuPercent = qBound(0.0, m_cpuPercent, 100.0);
+        }
     }
-    int x = anchor.x() + m_capsule->width() - width;
-    int y = anchor.y() - m_capsuleDetail->height() - 8;
-    if (y < avail.top() + 4) {
-        y = anchor.y() + m_capsule->height() + 8; // 上方放不下就翻到下方
-    }
-    x = qBound(avail.left() + 4, x, qMax(avail.left() + 4, avail.right() - width - 4));
-    m_capsuleDetail->move(x, y);
-    m_capsuleDetail->show();
-    m_capsuleDetail->raise();
-}
-
-void MainWindow::hideCapsuleDetail()
-{
-    if (m_capsuleHoverTimer) {
-        m_capsuleHoverTimer->stop();
-    }
-    if (m_capsuleDetail && m_capsuleDetail->isVisible()) {
-        m_capsuleDetail->hide();
-    }
+    m_cpuLastProc100ns = proc100ns;
+    m_cpuLastWallMs = wallMs;
+    return m_cpuPercent;
 }
 
 void MainWindow::refreshStatusCapsule()
@@ -2796,65 +2757,70 @@ void MainWindow::refreshStatusCapsule()
 
     PROCESS_MEMORY_COUNTERS_EX pmc{};
     QString mem = QStringLiteral("—");
-    QString peak = QStringLiteral("—");
     if (GetProcessMemoryInfo(GetCurrentProcess(),
                              reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc))) {
         mem = QStringLiteral("%1 MB").arg(pmc.WorkingSetSize / 1048576);
-        peak = QStringLiteral("%1 MB").arg(pmc.PeakWorkingSetSize / 1048576);
     }
+
+    const double cpu = sampleProcessCpu();
+    const QString cpuText = QStringLiteral("CPU %1%").arg(QString::number(cpu, 'f', 1));
 
     const QString video = m_engine.currentVideo();
-    const QString profile = profileText(m_engine.performanceProfile());
-    double fps = m_engine.currentFps();
-    if (fps < 0.5) {
-        fps = 0.0;
-    }
-
-    // 简略：只留「分辨率 · 帧率 · 内存」三个用户真会看的数，其余进悬浮详情
     if (video.isEmpty()) {
-        m_capsuleLabel->setText(QStringLiteral("待机 · 内存 %1").arg(mem));
+        m_capsuleLabel->setText(QStringLiteral("待机 · %1 · 内存 %2").arg(cpuText, mem));
     } else {
-        const MediaInfo info = MediaInfoProbe::probe(video);
-        const QString res = info.valid()
-                                ? QStringLiteral("%1×%2").arg(info.width).arg(info.height)
-                                : QStringLiteral("—");
-        m_capsuleLabel->setText(QStringLiteral("%1 · %2 fps · %3")
-                                    .arg(res,
-                                         fps > 0 ? QString::number(fps, 'f', 1)
-                                                 : QStringLiteral("—"),
-                                         mem));
+        double fps = m_engine.currentFps();
+        if (fps < 0.5) {
+            fps = 0.0;
+        }
+        // 分辨率两条来源：视频问 libVLC（libvlc_video_get_width/height 只在
+        // 起播后有效），图片问 MediaInfoProbe（它走 QImageReader，对视频恒返回无效，
+        // 这正是旧版对视频一直显示「—」的原因）。谁有值用谁。
+        QSize size = m_engine.currentVideoSize();
+        if (!size.isValid()) {
+            const MediaInfo info = MediaInfoProbe::probe(video);
+            if (info.valid()) {
+                size = QSize(info.width, info.height);
+            }
+        }
+
+        QString playing;
+        if (size.isValid() && fps > 0) {
+            playing = QStringLiteral("%1×%2 · %3 fps")
+                          .arg(size.width())
+                          .arg(size.height())
+                          .arg(QString::number(fps, 'f', 1));
+        } else if (size.isValid()) {
+            playing = QStringLiteral("%1×%2").arg(size.width()).arg(size.height());
+        } else if (fps > 0) {
+            playing = QStringLiteral("%1 fps").arg(QString::number(fps, 'f', 1));
+        } else {
+            playing = QStringLiteral("—");
+        }
+        m_capsuleLabel->setText(
+            QStringLiteral("%1 · %2 · 内存 %3").arg(playing, cpuText, mem));
     }
 
-    if (m_capsuleDetailLabel) {
-        QStringList lines;
-        lines << QStringLiteral("解码档位：%1").arg(profile);
+    // 完整参数留在标准悬停提示里（解码档位、下发参数、缓存、峰值、运行时长），
+    // 不再做自绘浮层：那些数平时不看，但排查时还要有地方可查。
+    if (m_capsule) {
+        QStringList tip;
+        tip << QStringLiteral("解码档位：%1").arg(profileText(m_engine.performanceProfile()));
         if (m_engine.videoBackendReady()) {
-            lines << QStringLiteral("下发参数：%1")
-                         .arg(m_engine.performanceArguments().join(QLatin1Char(' ')));
+            tip << QStringLiteral("下发参数：%1")
+                       .arg(m_engine.performanceArguments().join(QLatin1Char(' ')));
         }
-        if (video.isEmpty()) {
-            lines << QStringLiteral("媒体：未播放视频");
-        } else {
-            const MediaInfo info = MediaInfoProbe::probe(video);
-            lines << QStringLiteral("媒体：%1%2")
-                         .arg(QFileInfo(video).fileName(),
-                              info.valid() ? QStringLiteral("  %1×%2")
-                                                 .arg(info.width)
-                                                 .arg(info.height)
-                                           : QString());
-            lines << QStringLiteral("实时帧率：%1")
-                         .arg(fps > 0 ? QStringLiteral("%1 fps").arg(fps, 0, 'f', 1)
-                                      : QStringLiteral("—（未播放）"));
+        if (!video.isEmpty()) {
+            tip << QStringLiteral("媒体：%1").arg(QFileInfo(video).fileName());
         }
-        if (!m_capsuleCacheText.isEmpty()) {
-            lines << m_capsuleCacheText;
-        }
-        lines << QStringLiteral("内存：%1（峰值 %2）").arg(mem, peak);
-        lines << QStringLiteral("运行时长：%1")
-                     .arg(humanDuration(m_startedAt.secsTo(QDateTime::currentDateTime())));
-        m_capsuleDetailLabel->setText(lines.join(QLatin1Char('\n')));
+        tip << QStringLiteral("进程内存峰值：%1 MB")
+                   .arg(pmc.PeakWorkingSetSize / 1048576);
+        tip << QStringLiteral("运行时长：%1")
+                   .arg(humanDuration(m_startedAt.secsTo(QDateTime::currentDateTime())));
+        m_capsule->setToolTip(tip.join(QLatin1Char('\n')));
     }
 }
+
 
 void MainWindow::refreshList()
 {
@@ -3790,8 +3756,6 @@ void MainWindow::resizeEvent(QResizeEvent* event)
     if (m_thumbTimer) {
         m_thumbTimer->start();
     }
-    // 胶囊已嵌入状态栏，位置跟着布局走；悬浮浮层是按旧几何算的，缩放后必须收掉
-    hideCapsuleDetail();
 }
 
 void MainWindow::updateGalleryMetrics()

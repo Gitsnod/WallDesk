@@ -3,6 +3,7 @@
 用法：python shot_pages.py [标签...]
 输出：C:/Users/Lenovo/AppData/Local/Temp/bench/walk_<标签>.png
 """
+import os
 import sys
 import time
 
@@ -27,7 +28,9 @@ def shoot(tag, win_page, settings_page):
     P1.pin_page(win_page=win_page, settings_page=settings_page)
     p, hwnd = V.launch()
     try:
-        time.sleep(2.0)
+        # 起播/解包 VLC 要几秒，状态栏里的 fps、分辨率要等播放器起来才有值；
+        # 需要看稳态就用 WALK_WAIT=8 覆盖。
+        time.sleep(float(os.environ.get("WALK_WAIT", "2.0")))
         left, top, w, h = V.D.win_rect(hwnd)
         ww, hh, rgb = V.grab(hwnd, 0, 0, w, h)
         name = OUT + "walk_" + tag + ".png"

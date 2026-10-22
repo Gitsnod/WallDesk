@@ -130,6 +130,8 @@ public:
     VlcProfile performanceProfile() const { return m_vlc.profile(); }
     /** 当前视频的实时帧率；无视频或后端不可用时为 0（V4.11）。 */
     double currentFps() const { return m_vlc.fps(); }
+    /** 当前视频的帧尺寸；未起播或还没解析出轨迹时返回无效值（V4.18 状态栏）。 */
+    QSize currentVideoSize() const { return m_vlc.videoSize(); }
     /** 当前档位会下发的 libVLC 参数，用于日志与「关于」诊断（V4.9）。 */
     QStringList performanceArguments() const;
 
