@@ -8,7 +8,7 @@
 ; 无需管理员权限，不写系统目录。
 
 #define MyAppName "WallDesk"
-#define MyAppVersion "4.18.0"
+#define MyAppVersion "4.18.1"
 #define MyAppPublisher "WallDesk Project"
 #define MyAppExeName "WallDesk.exe"
 #define MyAppSourceDir "..\dist\WallDesk-" + MyAppVersion + "-win64"

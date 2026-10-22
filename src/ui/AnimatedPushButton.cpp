@@ -3,6 +3,7 @@
 #include "Chevron.h"
 #include "MotionTokens.h"
 
+#include <QFontMetricsF>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -244,19 +245,38 @@ void AnimatedPushButton::paintEvent(QPaintEvent* event)
     // 文字/图标交给 QStyle 画（QSS color/font 经 palette 生效）；
     // pressed 时下沉 1px（paint 内 offset，不动 geometry）
     opt.rect.translate(0, m_pressed ? 1 : 0);
-    style()->drawControl(QStyle::CE_PushButtonLabel, &opt, &p, this);
 
-    // 带菜单的按钮（壁纸库「更多」）：自绘背景后 Qt 不画 menu-indicator，
-    // 只看文字看不出这里能展开菜单，与旁边的下拉框混在一起分不清。
-    // sizeHint 已经为 menu-indicator 预留了宽度，箭头直接画在那块空间里。
     if (menu()) {
-        QColor arrow = isPrimary() ? QColor(Qt::white)
-                                   : AppTheme::subTextColor(AppTheme::current());
+        // 带菜单的按钮（壁纸库「更多」）：自绘背景后 Qt 不画 menu-indicator。
+        // 早先的版本把箭头钉在最右侧留白里，结果和旁边的下拉框长得一模一样。
+        // 现在把「文字 + 箭头」当成一个整体居中，箭头紧跟文字 6px，
+        // 一眼能看出这是「按钮 + 附带菜单」，而不是一个选择框。
+        const QString label = text();
+        const QFontMetricsF fm(font());
+        const qreal gap = 6.0;
+        const qreal arrowW = 10.0;
+        const qreal total = fm.horizontalAdvance(label) + gap + arrowW;
+        const qreal x = (width() - total) / 2.0;
+        const qreal baseline = (height() - fm.height()) / 2.0 + fm.ascent()
+                               + (m_pressed ? 1.0 : 0.0);
+
+        QColor ink = opt.palette.buttonText().color();
+        p.setPen(ink);
+        p.setFont(font());
+        p.drawText(QPointF(x, baseline), label);
+
         if (!isEnabled()) {
-            arrow = AppTheme::subTextColor(AppTheme::current());
-            arrow.setAlphaF(0.4);
+            ink = AppTheme::subTextColor(AppTheme::current());
+            ink.setAlphaF(0.45);
+        } else {
+            ink = AppTheme::subTextColor(AppTheme::current());
         }
-        Chevron::drawDown(p, QRectF(width() - 20.0, 0.0, 12.0, height()), arrow, 1.6);
+        Chevron::drawDown(p,
+                          QRectF(x + fm.horizontalAdvance(label) + gap,
+                                 (height() - arrowW) / 2.0, arrowW, arrowW),
+                          ink, 1.5);
+    } else {
+        style()->drawControl(QStyle::CE_PushButtonLabel, &opt, &p, this);
     }
 }
 

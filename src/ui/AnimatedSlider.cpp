@@ -12,19 +12,24 @@ namespace {
 
 /** 轨道高度（与 AppTheme QSS 的 groove 高度一致）。 */
 constexpr double kTrackHeight = 4.0;
-/** handle 基础半径（QSS 里 14px 直径）。 */
-constexpr double kHandleRadius = 7.0;
+/** handle 基础半径（比旧版小 0.5，给 hover 光晕腾出空间）。 */
+constexpr double kHandleRadius = 6.8;
+/** 左右留白：必须 ≥ 光晕最大半径，否则 0%/100% 位置的光晕会被控件矩形切平。 */
+constexpr double kInset = 12.0;
 
 } // namespace
 
 AnimatedSlider::AnimatedSlider(QWidget* parent)
     : QSlider(parent)
 {
+    // 17px 高放不下 24px 的光晕，hover 时上下直接被裁掉（旧版症状）。
+    setMinimumHeight(24);
 }
 
 AnimatedSlider::AnimatedSlider(Qt::Orientation orientation, QWidget* parent)
     : QSlider(orientation, parent)
 {
+    setMinimumHeight(24);
 }
 
 AnimatedSlider::~AnimatedSlider() = default;
@@ -50,9 +55,9 @@ void AnimatedSlider::drawHorizontal(QPainter& p) const
         accent = border;
     }
 
-    const double radius = kHandleRadius + 1.4 * m_hover + 0.9 * m_press;
-    const double left = radius + 1.0;
-    const double right = width() - radius - 1.0;
+    const double radius = kHandleRadius + 1.2 * m_hover + 1.0 * m_press;
+    const double left = kInset;
+    const double right = width() - kInset;
     const double available = qMax(1.0, right - left);
 
     double ratio = double(value() - minimum()) / double(maximum() - minimum());
@@ -75,13 +80,14 @@ void AnimatedSlider::drawHorizontal(QPainter& p) const
     p.drawRoundedRect(QRectF(left, cy - kTrackHeight / 2.0, qMax(0.0, hx - left), kTrackHeight),
                       kTrackHeight / 2.0, kTrackHeight / 2.0);
 
-    // 触点光晕：只由 hover / press 驱动，避免轨道上出现常驻色块
+    // 触点光晕：只由 hover / press 驱动，避免轨道上出现常驻色块。
+    // 半径上限 11.5 < kInset，且 < 控件高/2 ⇒ 四个方向都不会被裁。
     const double haloAlpha = 0.12 * m_hover + 0.10 * m_press;
     if (haloAlpha > 0.001) {
         QColor halo = accent;
         halo.setAlphaF(haloAlpha);
         p.setBrush(halo);
-        p.drawEllipse(QPointF(hx, cy), radius + 6.0, radius + 6.0);
+        p.drawEllipse(QPointF(hx, cy), radius + 2.8, radius + 2.8);
     }
 
     // handle：白底 + accent 描边

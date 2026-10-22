@@ -11,8 +11,9 @@ class QRectF;
  *  所以收到这里，避免各画一份、粗细角度走形。 */
 namespace Chevron {
 
-/** 在 box 内居中画一个向下的 chevron（V 形）。 */
+/** 在 box 内居中画一个向下的 chevron（V 形）。
+ *  rotationDeg 绕 box 中心旋转（下拉框展开时转到 180° 表示「再点一次收起」）。 */
 void drawDown(QPainter& painter, const QRectF& box, const QColor& color,
-              qreal strokeWidth = 1.6);
+              qreal strokeWidth = 1.6, qreal rotationDeg = 0.0);
 
 } // namespace Chevron

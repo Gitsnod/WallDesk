@@ -25,6 +25,9 @@ struct Palette {
     const char* disabled;
     const char* tooltipBase;
     const char* tooltipText;
+    /** 下拉框填充色。必须与 window / card 都拉开差距：
+     *  早先用 hover 顶替，在 window(#F5F7FA) 上只差 4 个灰阶，等于没底。 */
+    const char* field;
 };
 
 const Palette kLight = {
@@ -42,6 +45,7 @@ const Palette kLight = {
     "#94A3B8", // disabled
     "#1F2937", // tooltipBase
     "#F8FAFC", // tooltipText
+    "#E8EDF4", // field
 };
 
 const Palette kDark = {
@@ -59,6 +63,7 @@ const Palette kDark = {
     "#64748B", // disabled
     "#334155", // tooltipBase
     "#E2E8F0", // tooltipText
+    "#2A3A52", // field
 };
 
 const Palette& paletteFor(ThemeKind kind)
@@ -115,26 +120,52 @@ QPushButton#primary:hover { background: {accentHover}; border-color: {accentHove
 QPushButton#primary:disabled { background: {accentSoft}; border-color: {accentSoft}; color: {disabled}; }
 QPushButton#danger:hover { border-color: #DC2626; color: #DC2626; }
 
-/* ---- 输入控件（M3 small 8px）---- */
-QComboBox, QSpinBox, QLineEdit {
+/* ---- 输入控件（M3 small 8px）----
+   文本框/微调框是白底 + 描边，表示「这里可以键入」。
+   下拉框走 M3 的 filled select：浅灰填充、无描边，只有右侧一个箭头。
+   两者靠底色区分，用户扫一眼就知道哪个能打字、哪个要点开选。 */
+QSpinBox, QLineEdit {
     background: {card};
     border: 1px solid {border};
     border-radius: 8px;
     padding: 5px 10px;
     min-height: 18px;
 }
-QComboBox:hover, QSpinBox:hover { border-color: {accent}; }
+QSpinBox:hover, QLineEdit:hover { border-color: {accent}; }
+QComboBox {
+    background: {field};
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 5px 6px 5px 10px;
+    min-height: 18px;
+}
+QComboBox:hover { background: {field}; border-color: {disabled}; }
+/* 展开中与键盘焦点：描边转主色，和「已聚焦的输入框」同一套反馈 */
+QComboBox:on, QComboBox:focus { border-color: {accent}; background: {card}; }
+QComboBox:disabled {
+    background: {field}; color: {disabled};
+    border: 1px solid transparent; border-radius: 8px;
+}
 /* 微调框自带上下按钮，尺寸由 style 的 CT_SpinBox 算出，比同样式的下拉高 4px；
    单独把纵向 padding 减 2 抵消，让同一行里的控件齐平（max-height 对 sizeHint 无效）。 */
 QSpinBox { padding: 3px 10px; }
-QComboBox QAbstractItemView {
+/* 弹出层：独立顶层窗，AnimatedComboBox 给它开了透明背景，圆角必须画在容器上。
+   只给 QAbstractItemView 加圆角没用 —— 圆角外侧仍是窗口底色，看着还是方的。 */
+QFrame#comboPopup {
     background: {card};
     border: 1px solid {border};
-    border-radius: 8px;
-    selection-background-color: {accentSoft};
-    selection-color: {text};
+    border-radius: 10px;
     padding: 4px;
 }
+QComboBox QAbstractItemView {
+    background: transparent;
+    border: none;
+    outline: none;
+    selection-background-color: {accentSoft};
+    selection-color: {text};
+    padding: 0;
+}
+QComboBox QAbstractItemView::item { min-height: 26px; padding: 0 6px; }
 /* 右侧 26px 是箭头区：QSS 给不出箭头图像，AnimatedComboBox 在该区域内自绘
    chevron（见 src/ui/Chevron.cpp）。宽度必须与 AnimatedComboBox::paintEvent
    里的 arrowZone 一致，否则箭头会压住文字。 */
@@ -157,7 +188,10 @@ QListWidget::item { background: transparent; border: none; padding: 2px; }
 QListWidget::item:hover { background: transparent; }
 QListWidget::item:selected { background: transparent; color: {text}; }
 
-/* ---- 滑块 ---- */
+/* ---- 滑块 ----
+   这里只给一个兜底高度：AnimatedSlider 全自绘，需要 24px 才放得下 hover 光晕，
+   否则光晕会被控件矩形裁掉一半（旧版 17px 高，边缘直接切平）。 */
+QSlider { min-height: 24px; }
 QSlider::groove:horizontal { height: 4px; background: {border}; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: {accent}; border-radius: 2px; }
 QSlider::handle:horizontal {
@@ -166,11 +200,12 @@ QSlider::handle:horizontal {
 }
 QSlider::handle:horizontal:hover { background: {accentSoft}; }
 
-/* ---- 复选框（18px，M3 触摸目标）----
+/* ---- 复选框（18px 方块 + 2px 描边）----
    indicator 的填充/边框/勾由 AnimatedCheckBox 自绘（QSS 无 transition），
-   这里只声明尺寸，保证布局与 sizeHint 不随自绘改动。 */
-QCheckBox { spacing: 8px; }
+   这里只声明尺寸与行高：22px 是自绘焦点环（18+2×2）放得下的最小高度。 */
+QCheckBox { spacing: 8px; min-height: 22px; }
 QCheckBox::indicator { width: 18px; height: 18px; }
+/* 伪类规则整体替换基础规则，color 必须重写 */
 QCheckBox:disabled { color: {disabled}; }
 
 /* ---- 单选框（V4.17）----
@@ -304,6 +339,7 @@ QHash<QString, QString> variablesFor(const Palette& c)
         {QStringLiteral("text"), q(c.text)},
         {QStringLiteral("tooltipBase"), q(c.tooltipBase)},
         {QStringLiteral("tooltipText"), q(c.tooltipText)},
+        {QStringLiteral("field"), q(c.field)},
     };
 }
 
